@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { formatPrice, type CurrencySetting } from '@/lib/settings';
+import Link from 'next/link';
+import { formatPrice, type CategorySetting, type CurrencySetting } from '@/lib/settings';
 
 export interface DashboardItem {
   id: string;
@@ -22,6 +23,7 @@ export interface DashboardItem {
 interface DashboardClientProps {
   initialItems: DashboardItem[];
   currency: CurrencySetting;
+  categories?: CategorySetting[];
 }
 
 const LIGHT_OPTIONS = [
@@ -40,13 +42,21 @@ const CATEGORY_FILTERS = [
   { id: 'HARDWARE', label: 'Hardware', icon: '🔩' },
 ];
 
-export default function DashboardClient({ initialItems, currency }: DashboardClientProps) {
+export default function DashboardClient({ initialItems, currency, categories }: DashboardClientProps) {
+  const categoryOptions = categories && categories.length > 0
+    ? [{ id: "ALL", label: "All Categories", icon: "📦" }, ...categories.map((c) => ({ id: c.id, label: c.label, icon: c.icon }))]
+    : CATEGORY_FILTERS;
   const [items, setItems] = useState<DashboardItem[]>(initialItems);
+
+  // Sidebar & Help State
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [activeHelpSection, setActiveHelpSection] = useState<string | null>(null);
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [lightFilter, setLightFilter] = useState('ALL');
-  const [categoryFilter, setCategoryFilter] = useState('ALL');
+  const [categoryFilter, setCategoryFilter] = useState('PLANT');
   const [zoneFilter, setZoneFilter] = useState('ALL');
 
   // Updating light information state
@@ -63,7 +73,7 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
   // Extract unique greenhouse zones from items
   const uniqueZones = Array.from(new Set(items.map((i) => i.greenhouseZone).filter(Boolean)));
 
-  // Filter items
+  // Filter items based on category and other filters
   const filteredItems = items.filter((item) => {
     // Light filter
     if (lightFilter !== 'ALL' && item.sunReq !== lightFilter) return false;
@@ -114,8 +124,8 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
       } else {
         alert(data.error || 'Failed to update light information');
       }
-    } catch (e: any) {
-      alert(`Error updating light: ${e.message}`);
+    } catch (e: unknown) {
+      alert(`Error updating light: ${e instanceof Error ? e.message : "Unknown error"}`);
     } finally {
       setUpdatingItemId(null);
     }
@@ -150,8 +160,8 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
       } else {
         alert(data.error || 'Failed to save changes');
       }
-    } catch (e: any) {
-      alert(`Error saving batch: ${e.message}`);
+    } catch (e: unknown) {
+      alert(`Error saving batch: ${e instanceof Error ? e.message : "Unknown error"}`);
     } finally {
       setIsSavingEdit(false);
     }
@@ -172,24 +182,191 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
       } else {
         alert(data.error || 'Failed to delete');
       }
-    } catch (e: any) {
-      alert(`Delete error: ${e.message}`);
-    }
-  }
-
-  function formatSunReqBadge(raw: string) {
-    switch (raw) {
-      case 'FULL_SUN':
-        return <span className="bg-amber-100 text-amber-900 border border-amber-300 px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1">☀️ Full Sun</span>;
-      case 'PARTIAL_SHADE':
-        return <span className="bg-blue-100 text-blue-900 border border-blue-300 px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1">🌥 Partial Shade</span>;
-      default:
-        return <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1">🌤 Indirect Light</span>;
+    } catch (e: unknown) {
+      alert(`Delete error: ${e instanceof Error ? e.message : "Unknown error"}`);
     }
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-h-screen bg-emerald-50/20 text-slate-800 flex flex-col">
+
+      {/* Collapsible Sidebar Menu */}
+      <aside
+        className={
+          `fixed left-0 top-0 h-full bg-white border-r border-emerald-200/80 transition-all duration-300 ease-in-out z-30
+           ${isSidebarOpen ? 'w-64' : 'w-20'}
+          `
+        }
+      >
+        <div className="flex flex-col h-full">
+          {/* Sidebar Header */}
+          <div className="p-4 border-b border-emerald-200/80 bg-emerald-50/50">
+            <div className="flex items-center justify-between">
+              {isSidebarOpen && (
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">🌿</span>
+                  <h2 className="text-lg font-bold text-emerald-900">Moonhoya</h2>
+                </div>
+              )}
+              <button
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                className="p-2 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 transition-colors"
+              >
+                {isSidebarOpen ? '◀' : '▶'}
+              </button>
+            </div>
+          </div>
+
+          {/* Navigation Menu */}
+          <nav className="flex-1 p-3 space-y-2">
+            {/* Dashboard Link */}
+            <button
+              onClick={() => setCategoryFilter('PLANT')}
+              className={
+                `w-full flex items-center gap-3 p-3 rounded-xl transition-all font-medium text-sm
+                 ${categoryFilter === 'PLANT' 
+                   ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                   : 'text-slate-600 hover:bg-emerald-50/50 hover:text-emerald-700'
+                 }`
+              }
+            >
+              <span className="text-xl">📊</span>
+              {isSidebarOpen && <span>Dashboard</span>}
+            </button>
+
+            {/* Settings Link */}
+            <Link
+              href="/settings"
+              className="w-full flex items-center gap-3 p-3 rounded-xl transition-all font-medium text-sm text-slate-600 hover:bg-emerald-50/50 hover:text-emerald-700"
+            >
+              <span className="text-xl">⚙️</span>
+              {isSidebarOpen && <span>Settings</span>}
+            </Link>
+
+            {/* Help Link */}
+            <button
+              onClick={() => {
+                if (!isSidebarOpen) setIsSidebarOpen(true);
+                setIsHelpOpen(!isHelpOpen);
+              }}
+              className="w-full flex items-center gap-3 p-3 rounded-xl transition-all font-medium text-sm text-slate-600 hover:bg-emerald-50/50 hover:text-emerald-700"
+            >
+              <span className="text-xl">❓</span>
+              {isSidebarOpen && <span>Help & Index</span>}
+            </button>
+
+            {/* Collapsible Category Selection */}
+            {isSidebarOpen && (
+              <div className="mt-4 p-3 bg-emerald-50/30 rounded-xl border border-emerald-200/60">
+                <div className="text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-2">
+                  Display Category
+                </div>
+                <div className="space-y-1">
+                  {categoryOptions.map((cat) => (
+                    <button
+                      key={cat.id}
+                      onClick={() => setCategoryFilter(cat.id)}
+                      className={
+                        `w-full text-left p-2 rounded-lg text-sm transition-all
+                         ${categoryFilter === cat.id
+                           ? 'bg-emerald-200 text-emerald-900 font-semibold'
+                           : 'text-slate-600 hover:bg-emerald-100'
+                         }`
+                      }
+                    >
+                      <span className="inline-block w-5 text-center mr-2">{cat.icon}</span>
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </nav>
+
+          {/* Help Section */}
+          {isHelpOpen && isSidebarOpen && (
+            <div className="mx-3 mb-3 bg-slate-50 rounded-xl border border-slate-200 p-3">
+              <div className="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
+                Quick Index
+              </div>
+              <div className="space-y-1 text-xs">
+                <button
+                  onClick={() => setActiveHelpSection('inventory')}
+                  className="block w-full text-left p-2 rounded-lg hover:bg-emerald-100 text-slate-600"
+                >
+                  📋 Inventory Management
+                </button>
+                <button
+                  onClick={() => setActiveHelpSection('scanner')}
+                  className="block w-full text-left p-2 rounded-lg hover:bg-emerald-100 text-slate-600"
+                >
+                  📷 Mobile Scanner
+                </button>
+                <button
+                  onClick={() => setActiveHelpSection('categories')}
+                  className="block w-full text-left p-2 rounded-lg hover:bg-emerald-100 text-slate-600"
+                >
+                  🏷️ Categories & Settings
+                </button>
+                <button
+                  onClick={() => setActiveHelpSection('reports')}
+                  className="block w-full text-left p-2 rounded-lg hover:bg-emerald-100 text-slate-600"
+                >
+                  📊 Reports & Analytics
+                </button>
+              </div>
+
+              {activeHelpSection && (
+                <div className="mt-3 p-2 bg-emerald-50 rounded-lg border border-emerald-200 text-xs">
+                  <div className="font-semibold text-emerald-800 mb-1">
+                    {activeHelpSection === 'inventory' && 'Inventory Management'}
+                    {activeHelpSection === 'scanner' && 'Mobile Scanner'}
+                    {activeHelpSection === 'categories' && 'Categories & Settings'}
+                    {activeHelpSection === 'reports' && 'Reports & Analytics'}
+                  </div>
+                  <div className="text-slate-600 space-y-1">
+                    {activeHelpSection === 'inventory' && (
+                      <>Manage inventory batches, update quantities, edit plant details, and delete items. Use filters to focus on specific categories or light requirements.</>
+                    )}
+                    {activeHelpSection === 'scanner' && (
+                      <>Scan plant photos to identify species, capture new inventory, and update master catalog. Perfect for fieldwork and mobile data collection.</>
+                    )}
+                    {activeHelpSection === 'categories' && (
+                      <>Configure item categories, pricing currency, greenhouse locations, and pot sizes. Settings sync across all devices and applications.</>
+                    )}
+                    {activeHelpSection === 'reports' && (
+                      <>View inventory analytics, value summaries, and category distributions. Export data for record-keeping and reporting.</>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Footer in Sidebar */}
+          <div className="p-4 border-t border-emerald-200/80 bg-emerald-50/30">
+            {isSidebarOpen ? (
+              <div className="text-center">
+                <div className="text-xs text-emerald-900 font-semibold">Moonhoya Nursery</div>
+                <div className="text-xs text-slate-500 mt-1">Management System</div>
+                <div className="text-xs text-slate-400 mt-2">Design by Budi Setiawan</div>
+                <div className="text-xs text-slate-400">18 November 2026</div>
+              </div>
+            ) : (
+              <div className="text-center">
+                <div className="text-xs text-emerald-900 font-semibold">MS</div>
+                <div className="text-xs text-slate-400">BS - 18 Nov</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content with Sidebar Offset */}
+      <div
+        className={`flex-1 p-6 space-y-6 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'ml-64' : 'ml-20'}`}
+      >
+
       {/* Toast feedback */}
       {successToast && (
         <div className="bg-emerald-800 text-white font-medium px-4 py-3 rounded-2xl shadow-lg border border-emerald-600 flex items-center gap-2 animate-bounce">
@@ -268,7 +445,7 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="e.g. Hoya carnosa, MH-..., Zone A..."
-                className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-9 pr-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full bg-slate-50 border border-slate-500 rounded-xl pl-9 pr-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
           </div>
@@ -281,7 +458,7 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
             <select
               value={lightFilter}
               onChange={(e) => setLightFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full bg-slate-50 border border-slate-500 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
             >
               {LIGHT_OPTIONS.map((lo) => (
                 <option key={lo.value} value={lo.value}>
@@ -299,9 +476,9 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full bg-slate-50 border border-slate-500 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
             >
-              {CATEGORY_FILTERS.map((cat) => (
+              {categoryOptions.map((cat) => (
                 <option key={cat.id} value={cat.id}>
                   {cat.icon} {cat.label}
                 </option>
@@ -317,7 +494,7 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
             <select
               value={zoneFilter}
               onChange={(e) => setZoneFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full bg-slate-50 border border-slate-500 rounded-xl px-3 py-2 text-sm text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
             >
               <option value="ALL">All Zones ({uniqueZones.length})</option>
               {uniqueZones.map((z) => (
@@ -622,10 +799,12 @@ export default function DashboardClient({ initialItems, currency }: DashboardCli
               >
                 Delete
               </button>
+
             </div>
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
