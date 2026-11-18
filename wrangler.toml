@@ -1,0 +1,16 @@
+name = "moonhoya-nursery"
+main = ".open-next/worker.js"
+compatibility_date = "2026-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "production"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "moonhoya_db"
+database_id = "729cc67d-6d39-49e0-9c45-ca37e460f3da"
+
+[[r2_buckets]]
+binding = "MOONHOYA_PHOTOS"
+bucket_name = "moonhoya-plant-photos"
