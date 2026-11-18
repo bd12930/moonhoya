@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS InventoryBatch (
   FOREIGN KEY (speciesId) REFERENCES PlantSpecies(id)
 );
 
+-- Index to speed up the batch lookup in /api/inventory/scan
+CREATE INDEX IF NOT EXISTS idx_inventory_batch_lookup
+  ON InventoryBatch (speciesId, potSizeInches, greenhouseZone);
+
 -- Daily care logs for greenhouse staff
 CREATE TABLE IF NOT EXISTS CareTask (
   id TEXT PRIMARY KEY,

@@ -42,10 +42,22 @@
       "namedRegex": "^/_not\\-found(?:/)?$"
     },
     {
+      "page": "/api/inventory",
+      "regex": "^/api/inventory(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/inventory(?:/)?$"
+    },
+    {
       "page": "/api/inventory/scan",
       "regex": "^/api/inventory/scan(?:/)?$",
       "routeKeys": {},
       "namedRegex": "^/api/inventory/scan(?:/)?$"
+    },
+    {
+      "page": "/dashboard",
+      "regex": "^/dashboard(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/dashboard(?:/)?$"
     },
     {
       "page": "/favicon.ico",

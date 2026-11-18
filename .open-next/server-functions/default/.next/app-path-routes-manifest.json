@@ -1,7 +1,9 @@
 {
   "/_global-error/page": "/_global-error",
   "/_not-found/page": "/_not-found",
+  "/api/inventory/route": "/api/inventory",
   "/api/inventory/scan/route": "/api/inventory/scan",
+  "/dashboard/page": "/dashboard",
   "/favicon.ico/route": "/favicon.ico",
   "/page": "/"
 }
