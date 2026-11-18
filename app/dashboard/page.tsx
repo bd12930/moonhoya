@@ -1,5 +1,13 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-import { DEFAULT_CATEGORIES, DEFAULT_CURRENCY, type CategorySetting, type CurrencySetting } from '@/lib/settings';
+import {
+  DEFAULT_CATEGORIES,
+  DEFAULT_CURRENCY,
+  DEFAULT_LOCATIONS,
+  DEFAULT_POT_SIZES,
+  type CategorySetting,
+  type CurrencySetting,
+  type PotSizeSetting,
+} from '@/lib/settings';
 import DashboardClient, { type DashboardItem } from './dashboard-client';
 
 // Always render at request time — this page reads live D1 inventory data.
@@ -9,16 +17,20 @@ async function getInventoryData(): Promise<{
   items: DashboardItem[];
   currency: CurrencySetting;
   categories: CategorySetting[];
+  locations: string[];
+  potSizes: PotSizeSetting[];
   error?: string;
 }> {
   let currency = DEFAULT_CURRENCY;
   let categories = DEFAULT_CATEGORIES;
+  let locations = DEFAULT_LOCATIONS;
+  let potSizes = DEFAULT_POT_SIZES;
 
   try {
     const { env } = await getCloudflareContext({ async: true });
 
     if (!env.DB) {
-      return { items: [], currency, categories, error: 'D1 Database binding not found.' };
+      return { items: [], currency, categories, locations, potSizes, error: 'D1 Database binding not found.' };
     }
 
     // Fetch active settings from D1
@@ -28,13 +40,31 @@ async function getInventoryData(): Promise<{
         currency = JSON.parse(curRow.value);
       }
     } catch {
-      // Table may not yet be initialized, defaults apply
+      // defaults apply
     }
 
     try {
       const catRow = await env.DB.prepare(`SELECT value FROM AppSetting WHERE key = 'categories'`).first<{ value: string }>();
       if (catRow?.value) {
         categories = JSON.parse(catRow.value);
+      }
+    } catch {
+      // defaults apply
+    }
+
+    try {
+      const locRow = await env.DB.prepare(`SELECT value FROM AppSetting WHERE key = 'locations'`).first<{ value: string }>();
+      if (locRow?.value) {
+        locations = JSON.parse(locRow.value);
+      }
+    } catch {
+      // defaults apply
+    }
+
+    try {
+      const potRow = await env.DB.prepare(`SELECT value FROM AppSetting WHERE key = 'potSizes'`).first<{ value: string }>();
+      if (potRow?.value) {
+        potSizes = JSON.parse(potRow.value);
       }
     } catch {
       // defaults apply
@@ -60,14 +90,14 @@ async function getInventoryData(): Promise<{
       ORDER BY B.updatedAt DESC
     `).all();
 
-    return { items: (results as DashboardItem[]) ?? [], currency, categories };
+    return { items: (results as DashboardItem[]) ?? [], currency, categories, locations, potSizes };
   } catch (err: unknown) {
-    return { items: [], currency, categories, error: err instanceof Error ? err.message : 'Unknown error' };
+    return { items: [], currency, categories, locations, potSizes, error: err instanceof Error ? err.message : 'Unknown error' };
   }
 }
 
 export default async function MoonhoyaDashboard() {
-  const { items, currency, categories, error } = await getInventoryData();
+  const { items, currency, categories, locations, potSizes, error } = await getInventoryData();
 
   return (
     <div className="min-h-screen bg-emerald-50/20 text-slate-800 flex flex-col">
@@ -83,6 +113,8 @@ export default async function MoonhoyaDashboard() {
         initialItems={items}
         currency={currency}
         categories={categories}
+        locations={locations}
+        potSizes={potSizes}
       />
 
       {/* Required Footer Page */}

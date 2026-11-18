@@ -1,0 +1,20 @@
+{
+  "completedTurns": 0,
+  "endedAt": "2026-11-18T16:12:21.818Z",
+  "failedTurns": 1,
+  "harness": "ori",
+  "lastEventType": "turn.failed",
+  "runIds": [
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "qwen/qwen3.5-9b:floor",
+      "prompt": "edit inventory item, quantity use increment up and down button, greenhouse zone use drop down list, pot size use drop down list,\n  price should follow the currency in the setting. fix the item's picture is not displaying properly.",
+      "runId": "8a93d238-05b1-4a13-be3f-ac2d9d2dbf05",
+      "source": {
+        "surface": "code"
+      }
+    }
+  ],
+  "sessionId": "aa130b4c-a780-4222-b7e2-01d16ca221cf",
+  "startedAt": "2026-11-18T16:05:45.401Z"
+}

@@ -1,0 +1,117 @@
+{
+  "completedTurns": 0,
+  "endedAt": "2026-11-18T14:36:55.176Z",
+  "failedTurns": 11,
+  "harness": "ori",
+  "lastEventType": "turn.failed",
+  "runIds": [
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "cohere/north-mini-code:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "c746bcf7-0ac0-4e67-9ba7-25578e137f80",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "5b5b9d56-b59c-4626-88d1-aa9b7a869fde",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "f28bba4b-f23f-4bce-9b46-37db05b4c14f",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "509f6573-e76c-46bb-954d-dfa139498a19",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "bf7e0002-4d0a-4d4e-a674-a273eabe55bc",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "11ac8cf6-beb4-4c7b-aa68-83ed1461e797",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "2052b790-9c07-468e-9569-5f62bda74808",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "7a61c5c6-f71b-4d2b-b278-3202a8dd162f",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "9acfeaf3-f74c-4a25-a0c6-7c02f94b5459",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "inclusionai/ling-3.2-flash:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "dddf1db7-86d8-4238-813a-efa337fce956",
+      "source": {
+        "surface": "code"
+      }
+    },
+    {
+      "cwd": "/Users/budisetiawan/projects/moonhoya",
+      "model": "cohere/north-mini-code:free",
+      "prompt": "filter section can be hide. User should not update the light requirement directly from the dashboard.add link to mobile scanner under dashboard in the index. fix the image is not loading in the dashboard items.",
+      "runId": "b625b307-4632-4b3a-b77a-6e9f8e8e1e94",
+      "source": {
+        "surface": "code"
+      }
+    }
+  ],
+  "sessionId": "d568e4f2-27e7-4385-88a8-8f2ac3d7093c",
+  "startedAt": "2026-11-18T14:31:15.861Z",
+  "usage": {
+    "cacheCreationTokens": 0,
+    "cacheReadTokens": 0,
+    "contextTokens": 0,
+    "inputTokens": 0,
+    "outputTokens": 0
+  }
+}
