@@ -1,6 +1,7 @@
--- Static botanical data and care guides for Moonhoya catalog
+-- Static botanical data and master catalog items for Moonhoya (Plants, Supplies, Pots, Hardware)
 CREATE TABLE IF NOT EXISTS PlantSpecies (
   id TEXT PRIMARY KEY,
+  category TEXT DEFAULT 'PLANT',   -- 'PLANT', 'FERTILIZER', 'POT', 'EQUIPMENT', 'HARDWARE'
   commonName TEXT NOT NULL,
   botanicalName TEXT NOT NULL UNIQUE,
   description TEXT,
@@ -38,4 +39,11 @@ CREATE TABLE IF NOT EXISTS CareTask (
   completed INTEGER DEFAULT 0,
   completedBy TEXT,
   FOREIGN KEY (batchId) REFERENCES InventoryBatch(id)
+);
+
+-- Configurable settings (categories, currency, locations, pot sizes)
+CREATE TABLE IF NOT EXISTS AppSetting (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
 );
