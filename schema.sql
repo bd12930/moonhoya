@@ -13,21 +13,26 @@ CREATE TABLE IF NOT EXISTS PlantSpecies (
 );
 
 -- Master catalog photo gallery: up to 5 pictures per PlantSpecies entry
--- (cap enforced in /api/inventory/scan). PlantSpecies.imageUrl mirrors the first photo as the cover.
+-- (cap enforced in /api/inventory/scan). Each photo occupies a slot (1..5); the scanner picks the slot.
+-- PlantSpecies.imageUrl mirrors the photo in the lowest slot as the cover.
 CREATE TABLE IF NOT EXISTS PlantSpeciesPhoto (
   id TEXT PRIMARY KEY,
   speciesId TEXT NOT NULL,
   imageUrl TEXT NOT NULL,
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+  slot INTEGER,
   FOREIGN KEY (speciesId) REFERENCES PlantSpecies(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_species_photo_lookup
   ON PlantSpeciesPhoto (speciesId, createdAt);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_species_photo_slot
+  ON PlantSpeciesPhoto (speciesId, slot);
+
 -- Backfill: carry over existing single cover photos into the gallery (idempotent via fixed id)
-INSERT OR IGNORE INTO PlantSpeciesPhoto (id, speciesId, imageUrl)
-  SELECT 'photo-' || id, id, imageUrl FROM PlantSpecies
+INSERT OR IGNORE INTO PlantSpeciesPhoto (id, speciesId, imageUrl, slot)
+  SELECT 'photo-' || id, id, imageUrl, 1 FROM PlantSpecies
   WHERE imageUrl IS NOT NULL AND imageUrl <> '';
 
 -- Live inventory batches tracked by pot size, zone, and precise quantities
@@ -72,3 +77,18 @@ CREATE TABLE IF NOT EXISTS AppUser (
   passwordHash TEXT NOT NULL,
   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Every on-device AI candidate for a scanned photo, kept against the inventory batch
+CREATE TABLE IF NOT EXISTS ScanDetection (
+  id TEXT PRIMARY KEY,
+  batchId TEXT NOT NULL,
+  rank INTEGER NOT NULL,          -- 1 = top AI match
+  botanicalName TEXT NOT NULL,
+  commonName TEXT NOT NULL,
+  confidence REAL,                -- 0-100
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (batchId) REFERENCES InventoryBatch(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_detection_batch
+  ON ScanDetection (batchId, rank);

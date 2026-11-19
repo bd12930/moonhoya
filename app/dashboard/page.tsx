@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 import { SESSION_COOKIE } from '@/lib/auth';
 import { getCurrentUser } from '@/lib/access';
+import { loadDetectionsByBatch } from '@/lib/scan-detections';
 import {
   DEFAULT_CATEGORIES,
   DEFAULT_CURRENCY,
@@ -94,9 +95,9 @@ async function getInventoryData(): Promise<{
       ORDER BY B.updatedAt DESC
     `).all();
 
-    // Attach each kind's full photo gallery (oldest first) for the item detail view
+    // Attach each kind's full photo gallery (slot order) for the item detail view
     const { results: photoRows } = await env.DB.prepare(
-      `SELECT speciesId, imageUrl FROM PlantSpeciesPhoto ORDER BY createdAt ASC, id ASC`
+      `SELECT speciesId, imageUrl FROM PlantSpeciesPhoto ORDER BY slot ASC, createdAt ASC, id ASC`
     ).all<{ speciesId: string; imageUrl: string }>();
 
     const photosBySpecies = new Map<string, string[]>();
@@ -106,9 +107,16 @@ async function getInventoryData(): Promise<{
       photosBySpecies.set(row.speciesId, list);
     }
 
+    const detectionsByBatch = await loadDetectionsByBatch(env.DB);
+
     const items = ((results as DashboardItem[]) ?? []).map((item) => {
       const photos = item.speciesId ? photosBySpecies.get(item.speciesId) ?? [] : [];
-      return { ...item, photos, photoCount: photos.length };
+      return {
+        ...item,
+        photos,
+        photoCount: photos.length,
+        aiDetections: detectionsByBatch.get(item.id) ?? [],
+      };
     });
 
     return { items, currency, categories, locations, potSizes };

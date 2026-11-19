@@ -49,21 +49,30 @@ export async function GET(request: NextRequest) {
     const { results } = await stmt.all<{ id: string }>();
     const species: { id: string }[] = results ?? [];
 
-    // Attach each kind's photo gallery (oldest first)
+    // Attach each kind's photo gallery in slot order (slot 1 first)
     const { results: photoRows } = await env.DB.prepare(
-      `SELECT speciesId, imageUrl FROM PlantSpeciesPhoto ORDER BY createdAt ASC, id ASC`
-    ).all<{ speciesId: string; imageUrl: string }>();
+      `SELECT speciesId, slot, imageUrl FROM PlantSpeciesPhoto ORDER BY slot ASC, createdAt ASC, id ASC`
+    ).all<{ speciesId: string; slot: number | null; imageUrl: string }>();
 
     const photosBySpecies = new Map<string, string[]>();
+    // photoSlots[i] is the picture in slot i+1, or null when the slot is empty
+    const slotsBySpecies = new Map<string, (string | null)[]>();
     for (const row of photoRows ?? []) {
       const list = photosBySpecies.get(row.speciesId) ?? [];
       list.push(row.imageUrl);
       photosBySpecies.set(row.speciesId, list);
+
+      if (row.slot && row.slot >= 1 && row.slot <= MAX_PHOTOS_PER_SPECIES) {
+        const slots = slotsBySpecies.get(row.speciesId) ?? Array.from({ length: MAX_PHOTOS_PER_SPECIES }, () => null);
+        slots[row.slot - 1] = row.imageUrl;
+        slotsBySpecies.set(row.speciesId, slots);
+      }
     }
 
     const withPhotos = species.map((s) => {
       const photos = photosBySpecies.get(s.id) ?? [];
-      return { ...s, photos, photoCount: photos.length };
+      const photoSlots = slotsBySpecies.get(s.id) ?? Array.from({ length: MAX_PHOTOS_PER_SPECIES }, () => null);
+      return { ...s, photos, photoSlots, photoCount: photos.length };
     });
 
     return NextResponse.json({ success: true, species: withPhotos, maxPhotos: MAX_PHOTOS_PER_SPECIES });

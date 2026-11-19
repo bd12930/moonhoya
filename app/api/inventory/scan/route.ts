@@ -4,6 +4,48 @@ import { MAX_PHOTOS_PER_SPECIES } from '../../../../lib/species-photos';
 
 export const dynamic = 'force-dynamic';
 
+interface ScanDetectionInput {
+  botanicalName: string;
+  commonName: string;
+  confidence: number | null;
+}
+
+/** Validates the JSON `detections` field sent by the scanner (AI candidates, max 5). */
+function parseDetections(raw: FormDataEntryValue | null): ScanDetectionInput[] {
+  if (typeof raw !== 'string' || !raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const out: ScanDetectionInput[] = [];
+  for (const item of parsed.slice(0, 5)) {
+    if (!item || typeof item !== 'object') continue;
+    const { botanicalName, commonName, confidence } = item as Record<string, unknown>;
+    if (typeof botanicalName !== 'string' || !botanicalName.trim()) continue;
+    if (typeof commonName !== 'string' || !commonName.trim()) continue;
+    out.push({
+      botanicalName: botanicalName.trim(),
+      commonName: commonName.trim(),
+      confidence: typeof confidence === 'number' && Number.isFinite(confidence)
+        ? Math.min(100, Math.max(0, confidence))
+        : null,
+    });
+  }
+  return out;
+}
+
+/** Parses the gallery slot (1..MAX_PHOTOS_PER_SPECIES) the user picked. Returns null if not a valid slot. */
+function parseSlot(raw: FormDataEntryValue | null): number | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_PHOTOS_PER_SPECIES) return null;
+  return n;
+}
+
 export async function POST(request: NextRequest) {
   let uploadedKey: string | null = null;
 
@@ -29,6 +71,15 @@ export async function POST(request: NextRequest) {
     // Photo & saving options
     const file = formData.get('photo') as File | null;
     const savePhoto = formData.get('savePhoto') === 'true';
+    const rawSlot = formData.get('slot');
+    const requestedSlot = parseSlot(rawSlot);
+
+    if (rawSlot && requestedSlot === null) {
+      return NextResponse.json(
+        { error: `Slot must be a number from 1 to ${MAX_PHOTOS_PER_SPECIES}.` },
+        { status: 400 }
+      );
+    }
 
     // Master species metadata
     let speciesId = (formData.get('speciesId') as string) || null;
@@ -40,7 +91,7 @@ export async function POST(request: NextRequest) {
     const description = (formData.get('description') as string) || '';
 
     // 2. Resolve the master catalog entry (PlantSpecies) before touching R2,
-    //    so the photo cap can be checked up front.
+    //    so the photo slot can be checked up front.
     let isNewMasterItem = false;
     let coverImageUrl: string | null = null;
 
@@ -67,28 +118,51 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const countRow = await env.DB.prepare(
-      `SELECT COUNT(*) AS count FROM PlantSpeciesPhoto WHERE speciesId = ?`
-    ).bind(speciesId).first<{ count: number }>();
-    let photoCount = countRow?.count ?? 0;
+    const { results: slotRows } = await env.DB.prepare(
+      `SELECT id, slot, imageUrl FROM PlantSpeciesPhoto WHERE speciesId = ?`
+    ).bind(speciesId).all<{ id: string; slot: number | null; imageUrl: string }>();
+    const photos: { id: string; slot: number | null; imageUrl: string }[] = slotRows ?? [];
+    let photoCount = photos.length;
 
-    // 3. Photo storage: only when the user opted in and a file was sent
+    // 3. Photo storage: only when the user opted in and a file was sent.
+    //    The target is the slot the user picked (an occupied slot is replaced),
+    //    or the first free slot when no slot was sent.
     const wantsNewPhoto = savePhoto && !!file && file.size > 0;
 
-    if (wantsNewPhoto && photoCount >= MAX_PHOTOS_PER_SPECIES) {
-      return NextResponse.json(
-        {
-          error: `This kind already has ${MAX_PHOTOS_PER_SPECIES} photos. Remove one before adding another.`,
-          photoCount,
-          maxPhotos: MAX_PHOTOS_PER_SPECIES,
-        },
-        { status: 409 }
-      );
+    let targetSlot: number | null = null;
+    let replacedPhoto: { id: string; imageUrl: string } | null = null;
+
+    if (wantsNewPhoto) {
+      if (requestedSlot !== null) {
+        targetSlot = requestedSlot;
+      } else {
+        const used = new Set(photos.map((p) => p.slot));
+        for (let s = 1; s <= MAX_PHOTOS_PER_SPECIES; s++) {
+          if (!used.has(s)) {
+            targetSlot = s;
+            break;
+          }
+        }
+      }
+
+      if (targetSlot === null) {
+        return NextResponse.json(
+          {
+            error: `This kind already has ${MAX_PHOTOS_PER_SPECIES} photos. Pick a slot to replace.`,
+            photoCount,
+            maxPhotos: MAX_PHOTOS_PER_SPECIES,
+          },
+          { status: 409 }
+        );
+      }
+
+      const occupant = photos.find((p) => p.slot === targetSlot);
+      replacedPhoto = occupant ? { id: occupant.id, imageUrl: occupant.imageUrl } : null;
     }
 
     let newPhotoUrl: string | null = null;
 
-    if (wantsNewPhoto && file && env.MOONHOYA_PHOTOS) {
+    if (wantsNewPhoto && targetSlot !== null && file && env.MOONHOYA_PHOTOS) {
       const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
       uploadedKey = `${category.toLowerCase()}-${Date.now()}-${sanitizedName}`;
 
@@ -117,52 +191,81 @@ export async function POST(request: NextRequest) {
       ).run();
     }
 
-    // 5. Append the new photo. The cap is enforced inside the INSERT itself,
-    //    so two concurrent scans cannot both take the last slot.
-    if (newPhotoUrl) {
+    // 5. Write the photo into its slot. Replacing deletes the old row and inserts the new one
+    //    in a single transaction; the unique (speciesId, slot) index guards against races.
+    if (newPhotoUrl && targetSlot !== null) {
       const photoId = `photo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const insert = await env.DB.prepare(`
-        INSERT INTO PlantSpeciesPhoto (id, speciesId, imageUrl)
-        SELECT ?, ?, ?
-        WHERE (SELECT COUNT(*) FROM PlantSpeciesPhoto WHERE speciesId = ?) < ?
-      `).bind(photoId, speciesId, newPhotoUrl, speciesId, MAX_PHOTOS_PER_SPECIES).run();
+      const statements = [];
+      if (replacedPhoto) {
+        statements.push(env.DB.prepare(`DELETE FROM PlantSpeciesPhoto WHERE id = ?`).bind(replacedPhoto.id));
+      }
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO PlantSpeciesPhoto (id, speciesId, imageUrl, slot) VALUES (?, ?, ?, ?)`
+        ).bind(photoId, speciesId, newPhotoUrl, targetSlot)
+      );
 
-      if (!insert.meta.changes) {
-        // Lost a race for the last slot: remove the orphaned upload.
+      try {
+        await env.DB.batch(statements);
+      } catch {
+        // Most likely another scan filled this slot first: remove the orphaned upload.
         await env.MOONHOYA_PHOTOS?.delete(uploadedKey!);
         uploadedKey = null;
         return NextResponse.json(
-          {
-            error: `This kind already has ${MAX_PHOTOS_PER_SPECIES} photos. Remove one before adding another.`,
-            maxPhotos: MAX_PHOTOS_PER_SPECIES,
-          },
+          { error: `Could not save to slot ${targetSlot}. Please try again.` },
           { status: 409 }
         );
       }
 
-      photoCount += 1;
       uploadedKey = null; // now referenced by the DB, keep it
 
-      // First photo becomes the cover if none is set yet
-      if (!coverImageUrl) {
-        await env.DB.prepare(
-          `UPDATE PlantSpecies SET imageUrl = ? WHERE id = ? AND (imageUrl IS NULL OR imageUrl = '')`
-        ).bind(newPhotoUrl, speciesId).run();
-        coverImageUrl = newPhotoUrl;
+      if (replacedPhoto) {
+        // The old picture is no longer referenced: remove its R2 object (best-effort)
+        const oldKey = replacedPhoto.imageUrl.startsWith('/api/photos/')
+          ? replacedPhoto.imageUrl.slice('/api/photos/'.length)
+          : null;
+        if (oldKey) {
+          try {
+            await env.MOONHOYA_PHOTOS?.delete(oldKey);
+          } catch {
+            // ignore: orphan object is harmless
+          }
+        }
+      } else {
+        photoCount += 1;
       }
+
+      // Cover mirrors the photo in the lowest slot
+      const first = await env.DB.prepare(
+        `SELECT imageUrl FROM PlantSpeciesPhoto WHERE speciesId = ? ORDER BY slot ASC LIMIT 1`
+      ).bind(speciesId).first<{ imageUrl: string }>();
+      coverImageUrl = first?.imageUrl ?? null;
+      await env.DB.prepare(`UPDATE PlantSpecies SET imageUrl = ? WHERE id = ?`)
+        .bind(coverImageUrl, speciesId)
+        .run();
     }
 
     // 6. Build collision-resistant SKU for inventory batch
     const catPrefix = category === 'PLANT' ? 'MH' : category.substring(0, 3).toUpperCase();
     const cleanCode = botanicalName.replace(/[^a-zA-Z0-9]/g, '').substring(0, 6).toUpperCase();
     const potLabel = potSize > 0 ? `-${potSize}IN` : '';
-    const sku = `${catPrefix}-${cleanCode}${potLabel}-${zone.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase()}`;
+    // SKU is shortened (6-char name, 4-char zone), so different kinds/zones can produce the same base.
+    // InventoryBatch.sku is UNIQUE, so take the base SKU or the first free numbered variant (-2, -3, ...).
+    const baseSku = `${catPrefix}-${cleanCode}${potLabel}-${zone.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase()}`;
+    let sku = baseSku;
+    for (let n = 2; ; n++) {
+      const taken = await env.DB.prepare(`SELECT 1 AS found FROM InventoryBatch WHERE sku = ?`)
+        .bind(sku)
+        .first<{ found: number }>();
+      if (!taken) break;
+      sku = `${baseSku}-${n}`;
+    }
 
     // 7. Update or create Inventory Batch
     const existingBatch = await env.DB.prepare(`
-      SELECT id, quantity FROM InventoryBatch
+      SELECT id, sku, quantity FROM InventoryBatch
       WHERE speciesId = ? AND potSizeInches = ? AND greenhouseZone = ?
-    `).bind(speciesId, potSize, zone).first<{ id: string; quantity: number }>();
+    `).bind(speciesId, potSize, zone).first<{ id: string; sku: string; quantity: number }>();
 
     let batchResult: { id: string; sku: string; quantity: number; updated: boolean };
 
@@ -174,7 +277,7 @@ export async function POST(request: NextRequest) {
         WHERE id = ?
       `).bind(newQty, priceCents, existingBatch.id).run();
 
-      batchResult = { id: existingBatch.id, sku, quantity: newQty, updated: true };
+      batchResult = { id: existingBatch.id, sku: existingBatch.sku, quantity: newQty, updated: true };
     } else {
       const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       await env.DB.prepare(`
@@ -183,6 +286,22 @@ export async function POST(request: NextRequest) {
       `).bind(batchId, sku, speciesId, potSize, qtyToAdd, priceCents, zone).run();
 
       batchResult = { id: batchId, sku, quantity: qtyToAdd, updated: false };
+    }
+
+    // 8. Keep every AI-detected candidate for this photo against the batch
+    const detections = parseDetections(formData.get('detections'));
+    for (const [index, d] of detections.entries()) {
+      await env.DB.prepare(`
+        INSERT INTO ScanDetection (id, batchId, rank, botanicalName, commonName, confidence)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(
+        `det-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        batchResult.id,
+        index + 1,
+        d.botanicalName,
+        d.commonName,
+        d.confidence
+      ).run();
     }
 
     return NextResponse.json({
@@ -197,6 +316,8 @@ export async function POST(request: NextRequest) {
       photoCount,
       maxPhotos: MAX_PHOTOS_PER_SPECIES,
       addedPhotoUrl: newPhotoUrl,
+      addedPhotoSlot: newPhotoUrl ? targetSlot : null,
+      replacedPhoto: !!replacedPhoto && !!newPhotoUrl,
       batch: batchResult,
       message: isNewMasterItem
         ? `🌟 Registered new ${category.toLowerCase()}: "${commonName}" & created stock batch (+${qtyToAdd} units)!`

@@ -10,6 +10,7 @@ import {
   type CurrencySetting,
   type PotSizeSetting,
 } from '@/lib/settings';
+import type { ScanDetectionItem } from '@/lib/scan-detections';
 
 export interface DashboardItem {
   id: string;
@@ -28,6 +29,8 @@ export interface DashboardItem {
   /** Full photo gallery from PlantSpeciesPhoto (oldest first) */
   photos?: string[];
   photoCount?: number;
+  /** AI candidates saved when this item was scanned (best first) */
+  aiDetections?: ScanDetectionItem[];
 }
 
 /** Entry from GET /api/species (the recommended catalog) */
@@ -197,6 +200,25 @@ export default function DashboardClient({ initialItems, currency, categories, lo
       setEditBotanicalText(match.botanicalName);
       setEditingItem({ ...editingItem, sunReq: match.sunReq });
     }
+  }
+
+  // AI candidates saved with this item's scan, one per botanical name (best rank first)
+  function aiCandidatesFor(item: DashboardItem): ScanDetectionItem[] {
+    const seen = new Set<string>();
+    const out: ScanDetectionItem[] = [];
+    for (const d of item.aiDetections ?? []) {
+      const key = d.botanicalName.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(d);
+    }
+    return out;
+  }
+
+  // Picking an AI candidate fills the species and botanical name (catalog rules still apply)
+  function pickDetection(d: ScanDetectionItem) {
+    handleSpeciesTextChange(d.commonName);
+    setEditBotanicalText(d.botanicalName);
   }
 
   function markImageFailed(src: string) {
@@ -943,12 +965,39 @@ export default function DashboardClient({ initialItems, currency, categories, lo
                     className="mt-1 w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </label>
+                {/* AI candidates saved with this item's scan */}
+                {aiCandidatesFor(editingItem).length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-600 mb-1">🤖 AI detected for this item (tap to use):</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {aiCandidatesFor(editingItem).map((d) => (
+                        <button
+                          key={d.botanicalName}
+                          type="button"
+                          onClick={() => pickDetection(d)}
+                          title={d.botanicalName}
+                          className="px-2.5 py-1 rounded-full border border-emerald-300 bg-emerald-50 text-emerald-900 text-xs font-semibold hover:bg-emerald-100"
+                        >
+                          {d.commonName}
+                          {d.confidence !== null ? ` · ${Math.round(d.confidence)}%` : ''}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <datalist id="edit-species-options">
                   {speciesCatalog
                     .filter((s) => (s.category || 'PLANT') === (editingItem.category || 'PLANT'))
                     .map((s) => (
                       <option key={s.id} value={s.commonName}>
                         {s.botanicalName}
+                      </option>
+                    ))}
+                  {aiCandidatesFor(editingItem)
+                    .filter((d) => !speciesCatalog.some((s) => s.commonName.trim().toLowerCase() === d.commonName.trim().toLowerCase()))
+                    .map((d) => (
+                      <option key={`ai-${d.botanicalName}`} value={d.commonName}>
+                        {d.botanicalName} (AI)
                       </option>
                     ))}
                 </datalist>

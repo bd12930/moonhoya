@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 import { SESSION_COOKIE } from '@/lib/auth';
 import { requireAdmin } from '@/lib/access';
+import { loadDetectionsByBatch, type ScanDetectionItem } from '@/lib/scan-detections';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +24,8 @@ export interface BatchItem {
   /** Full gallery of the master kind (PlantSpeciesPhoto), oldest first. Added by GET. */
   photos?: string[];
   photoCount?: number;
+  /** AI candidates saved when this batch was scanned. Added by GET. */
+  aiDetections?: ScanDetectionItem[];
 }
 
 /**
@@ -75,9 +78,9 @@ export async function GET(request: NextRequest) {
     const { results } = await stmt.all<BatchItem>();
     const items: BatchItem[] = results ?? [];
 
-    // Attach each kind's full photo gallery (oldest first) for the item detail view
+    // Attach each kind's full photo gallery (slot order) for the item detail view
     const { results: photoRows } = await env.DB.prepare(
-      `SELECT speciesId, imageUrl FROM PlantSpeciesPhoto ORDER BY createdAt ASC, id ASC`
+      `SELECT speciesId, imageUrl FROM PlantSpeciesPhoto ORDER BY slot ASC, createdAt ASC, id ASC`
     ).all<{ speciesId: string; imageUrl: string }>();
 
     const photosBySpecies = new Map<string, string[]>();
@@ -87,9 +90,16 @@ export async function GET(request: NextRequest) {
       photosBySpecies.set(row.speciesId, list);
     }
 
+    const detectionsByBatch = await loadDetectionsByBatch(env.DB);
+
     const withPhotos = items.map((item) => {
       const photos = photosBySpecies.get(item.speciesId) ?? [];
-      return { ...item, photos, photoCount: photos.length };
+      return {
+        ...item,
+        photos,
+        photoCount: photos.length,
+        aiDetections: detectionsByBatch.get(item.id) ?? [],
+      };
     });
 
     return NextResponse.json({ success: true, items: withPhotos });
@@ -203,6 +213,7 @@ export async function DELETE(request: NextRequest) {
 
     // Also clean up any dependent care tasks if present
     await env.DB.prepare(`DELETE FROM CareTask WHERE batchId = ?`).bind(id).run();
+    await env.DB.prepare(`DELETE FROM ScanDetection WHERE batchId = ?`).bind(id).run();
     await env.DB.prepare(`DELETE FROM InventoryBatch WHERE id = ?`).bind(id).run();
 
     return NextResponse.json({

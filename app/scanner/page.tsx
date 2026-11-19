@@ -19,6 +19,20 @@ import {
 // Item category types
 type ItemCategory = 'PLANT' | 'FERTILIZER' | 'POT' | 'EQUIPMENT' | 'HARDWARE';
 
+/** Keep only digits and one decimal point, e.g. "1 000.5" → "1000.5". */
+function sanitizePriceInput(raw: string): string {
+  const cleaned = raw.replace(/[^0-9.]/g, '');
+  const dot = cleaned.indexOf('.');
+  return dot === -1 ? cleaned : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '');
+}
+
+/** Display a plain price string with a space every three digits, e.g. "100000" → "100 000". */
+function formatPriceInput(plain: string): string {
+  const [intPart, decPart] = plain.split('.');
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return decPart !== undefined ? `${grouped}.${decPart}` : grouped;
+}
+
 interface MasterSpecies {
   id: string;
   category: ItemCategory;
@@ -30,7 +44,21 @@ interface MasterSpecies {
   petSafe: number;
   imageUrl?: string | null;
   photos?: string[];
+  /** Picture in each gallery slot (index 0 = slot 1), null when empty. */
+  photoSlots?: (string | null)[];
   photoCount?: number;
+}
+
+/** Gallery slots 1..MAX as an array (index 0 = slot 1), null when empty. */
+function gallerySlots(species: MasterSpecies): (string | null)[] {
+  if (species.photoSlots) return species.photoSlots;
+  return Array.from({ length: MAX_PHOTOS_PER_SPECIES }, (_, i) => species.photos?.[i] ?? null);
+}
+
+/** First empty slot number (1-based); falls back to slot 1 when the gallery is full (that slot gets replaced). */
+function firstFreeSlot(slots: (string | null)[]): number {
+  const idx = slots.findIndex((url) => !url);
+  return idx === -1 ? 1 : idx + 1;
 }
 
 interface InventoryBatch {
@@ -81,6 +109,8 @@ export default function MobileScannerPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiResult, setAiResult] = useState<PlantAIResult | null>(null);
   const [alternativeMatches, setAlternativeMatches] = useState<PlantAIResult[]>([]);
+  // Every candidate the on-device AI returned for this photo (saved with the scan)
+  const [aiDetections, setAiDetections] = useState<PlantAIResult[]>([]);
 
   // Step 4: Master Database Matching
   const [masterCatalog, setMasterCatalog] = useState<MasterSpecies[]>([]);
@@ -89,13 +119,17 @@ export default function MobileScannerPage() {
 
   // Step 5: Photo save preference (ask user if new photo should be saved)
   const [saveNewPhoto, setSaveNewPhoto] = useState<boolean>(false);
+  // Gallery slot (1-based) the user picked for the new picture (matched kind only)
+  const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
 
-  // Gallery slots for the matched kind (max MAX_PHOTOS_PER_SPECIES per PlantSpecies)
-  const matchedPhotos = matchedExistingSpecies?.photos ?? [];
-  const photoSlotsUsed = matchedExistingSpecies ? (matchedExistingSpecies.photoCount ?? matchedPhotos.length) : 0;
+  // Gallery slots for the matched kind (MAX_PHOTOS_PER_SPECIES per PlantSpecies)
+  const matchedSlots = matchedExistingSpecies ? gallerySlots(matchedExistingSpecies) : [];
+  const photoSlotsUsed = matchedSlots.filter(Boolean).length;
   const slotsFull = !!matchedExistingSpecies && photoSlotsUsed >= MAX_PHOTOS_PER_SPECIES;
-  // A new photo is only saved when the user chose it AND a slot is free
-  const willSavePhoto = saveNewPhoto && !slotsFull;
+  // Slot the picture goes into: the picked slot (an occupied slot is replaced). New kinds have no gallery yet.
+  const savingSlot = matchedExistingSpecies ? selectedSlot : null;
+  // A new photo is saved when the user chose it and, for a matched kind, a slot is picked
+  const willSavePhoto = saveNewPhoto && (!matchedExistingSpecies || savingSlot !== null);
 
   // Step 6: Inventory Batch inputs
   const [formCommonName, setFormCommonName] = useState('');
@@ -181,6 +215,14 @@ export default function MobileScannerPage() {
     }
   }, [selectedCategory]);
 
+  // IDR default unit price for new items (100,000 Rupiah). Runs after the category
+  // preset above, and again when the currency finishes loading after mount.
+  useEffect(() => {
+    if (currency.code === 'IDR') {
+      setFormPriceDollars('100000');
+    }
+  }, [selectedCategory, currency.code]);
+
   async function fetchMasterCatalog() {
     try {
       const res = await fetch('/api/species');
@@ -248,6 +290,7 @@ export default function MobileScannerPage() {
       const result = await identifyPlantOnDevice(img);
       setAiResult(result.topMatch);
       setAlternativeMatches(result.allMatches.slice(1, 4));
+      setAiDetections(result.allMatches);
 
       // Match against live Master Catalog
       matchWithMasterCatalog(result.topMatch.botanicalName, result.topMatch);
@@ -278,11 +321,13 @@ export default function MobileScannerPage() {
 
       // Default: keep the gallery if it has photos; otherwise offer to save the new one
       setSaveNewPhoto((existing.photoCount ?? 0) === 0);
+      setSelectedSlot(firstFreeSlot(gallerySlots(existing)));
     } else {
       // New kind / variety detected!
       setMatchedExistingSpecies(null);
       setIsNewKind(true);
       setSaveNewPhoto(true);
+      setSelectedSlot(null);
 
       if (fallbackAiData) {
         setFormCommonName(fallbackAiData.commonName);
@@ -330,6 +375,23 @@ export default function MobileScannerPage() {
 
       if (willSavePhoto && capturedPhoto) {
         formData.append('photo', capturedPhoto);
+        if (savingSlot !== null) {
+          formData.append('slot', String(savingSlot));
+        }
+      }
+
+      // All AI-detected candidates for this photo, saved against the inventory batch
+      if (aiDetections.length > 0) {
+        formData.append(
+          'detections',
+          JSON.stringify(
+            aiDetections.map((d) => ({
+              botanicalName: d.botanicalName,
+              commonName: d.commonName,
+              confidence: d.confidence,
+            }))
+          )
+        );
       }
 
       const res = await fetch('/api/inventory/scan', {
@@ -358,6 +420,7 @@ export default function MobileScannerPage() {
         setPreviewUrl(null);
         setCompressionMetrics(null);
         setAiResult(null);
+        setAiDetections([]);
         setMatchedExistingSpecies(null);
         setFormQuantity(1);
       }, 2500);
@@ -729,22 +792,38 @@ export default function MobileScannerPage() {
 
                   {/* Photo gallery: existing pictures + empty slots */}
                   <div className="grid grid-cols-5 gap-1.5">
-                    {Array.from({ length: MAX_PHOTOS_PER_SPECIES }).map((_, i) => {
-                      const url = matchedPhotos[i];
-                      return url ? (
-                        <img
-                          key={`${url}-${i}`}
-                          src={url}
-                          alt={`${matchedExistingSpecies.commonName} photo ${i + 1}`}
-                          className="aspect-square w-full rounded-lg object-cover border border-slate-700"
-                        />
-                      ) : (
-                        <div
-                          key={`empty-${i}`}
-                          className="aspect-square w-full rounded-lg bg-slate-800/60 border border-dashed border-slate-700 flex items-center justify-center text-slate-600 text-lg"
+                    {matchedSlots.map((url, i) => {
+                      const slot = i + 1;
+                      const isPicked = willSavePhoto && savingSlot === slot;
+                      return (
+                        <button
+                          key={`slot-${slot}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSlot(slot);
+                            setSaveNewPhoto(true);
+                          }}
+                          aria-pressed={isPicked}
+                          aria-label={`Save new picture to slot ${slot}${url ? ' (replaces current)' : ' (empty)'}`}
+                          className={`relative aspect-square w-full rounded-lg overflow-hidden transition-all ${
+                            isPicked
+                              ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-slate-900'
+                              : 'hover:ring-1 hover:ring-slate-500'
+                          } ${url ? 'border border-slate-700' : 'bg-slate-800/60 border border-dashed border-slate-700 text-slate-600 text-lg flex items-center justify-center'}`}
                         >
-                          🌿
-                        </div>
+                          {url ? (
+                            <img
+                              src={url}
+                              alt={`${matchedExistingSpecies.commonName} photo ${slot}`}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <span>🌿</span>
+                          )}
+                          <span className="absolute bottom-0.5 right-1 text-[10px] font-bold text-white bg-slate-900/70 rounded px-1">
+                            {slot}
+                          </span>
+                        </button>
                       );
                     })}
                   </div>
@@ -771,23 +850,23 @@ export default function MobileScannerPage() {
 
                       <button
                         type="button"
-                        disabled={slotsFull}
+                        disabled={savingSlot === null}
                         onClick={() => setSaveNewPhoto(true)}
                         className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
-                          slotsFull
-                            ? 'border-slate-800 bg-slate-900/60 text-slate-600 cursor-not-allowed'
-                            : willSavePhoto
-                              ? 'border-emerald-400 bg-emerald-950/60 text-white font-semibold'
-                              : 'border-slate-700 bg-slate-800/50 text-slate-400'
+                          willSavePhoto
+                            ? 'border-emerald-400 bg-emerald-950/60 text-white font-semibold'
+                            : 'border-slate-700 bg-slate-800/50 text-slate-400'
                         }`}
                       >
                         <div className="font-bold text-slate-200">
-                          {slotsFull ? '🔒 All slots used' : '📸 Add New Photo'}
+                          {savingSlot === null ? '📸 Pick a slot above' : `📸 Save to slot ${savingSlot}`}
                         </div>
                         <div className="text-[11px] mt-0.5 text-slate-400">
-                          {slotsFull
-                            ? `Limit is ${MAX_PHOTOS_PER_SPECIES} photos per kind`
-                            : `Adds slot ${photoSlotsUsed + 1} of ${MAX_PHOTOS_PER_SPECIES} (~50 KB)`}
+                          {savingSlot === null
+                            ? 'Tap a slot in the gallery to choose where the picture goes'
+                            : matchedSlots[savingSlot - 1]
+                              ? `Replaces the picture in slot ${savingSlot} (~50 KB)`
+                              : `Fills empty slot ${savingSlot} of ${MAX_PHOTOS_PER_SPECIES} (~50 KB)`}
                         </div>
                       </button>
                     </div>
@@ -941,13 +1020,14 @@ export default function MobileScannerPage() {
                     💲 Unit Price ({currency.code}):
                   </label>
                   <div className="relative">
-                    <span className="absolute left-3.5 top-3.5 text-slate-400 font-bold">{currency.symbol}</span>
+                    <span className="absolute left-3.5 top-3.5 text-base text-slate-400 font-bold">{currency.symbol}</span>
                     <input
-                      type="number"
-                      step="0.50"
-                      value={formPriceDollars}
-                      onChange={(e) => setFormPriceDollars(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-3 text-base text-white font-mono focus:outline-none focus:border-emerald-500"
+                      type="text"
+                      inputMode="decimal"
+                      value={formatPriceInput(formPriceDollars)}
+                      onChange={(e) => setFormPriceDollars(sanitizePriceInput(e.target.value))}
+                      style={{ paddingLeft: `calc(0.875rem + ${currency.symbol.length}ch + 0.375rem)` }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pr-3 py-3 text-base text-white font-mono focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
