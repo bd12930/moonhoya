@@ -32,6 +32,7 @@ export interface DashboardItem {
 
 interface DashboardClientProps {
   initialItems: DashboardItem[];
+  isAdmin: boolean;
   currency: CurrencySetting;
   categories?: CategorySetting[];
   locations?: string[];
@@ -117,7 +118,7 @@ function inputTextToCents(text: string, currencyCode: string): number {
   return Math.round(value * 100);
 }
 
-export default function DashboardClient({ initialItems, currency, categories, locations, potSizes }: DashboardClientProps) {
+export default function DashboardClient({ initialItems, currency, categories, locations, potSizes, isAdmin }: DashboardClientProps) {
   const zoneOptions = locations && locations.length > 0 ? locations : DEFAULT_LOCATIONS;
   const potSizeOptions = potSizes && potSizes.length > 0 ? potSizes : DEFAULT_POT_SIZES;
   // Image URLs that failed to load; these render a visible placeholder instead of disappearing
@@ -780,6 +781,8 @@ export default function DashboardClient({ initialItems, currency, categories, lo
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
+                          {isAdmin && (
+                          <>
                           <button
                             type="button"
                             onClick={() => openEditModal(item)}
@@ -796,6 +799,8 @@ export default function DashboardClient({ initialItems, currency, categories, lo
                           >
                             🗑️
                           </button>
+                          </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1105,17 +1110,19 @@ export default function DashboardClient({ initialItems, currency, categories, lo
               </div>
 
               <div className="flex gap-2.5 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const itemToEdit = viewingItem;
-                    setViewingItem(null);
-                    openEditModal(itemToEdit);
-                  }}
-                  className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-md transition-all text-center"
-                >
-                  ✏️ Edit Batch Details
-                </button>
+{isAdmin && (
+                                <button
+                    type="button"
+                    onClick={() => {
+                      const itemToEdit = viewingItem;
+                      setViewingItem(null);
+                      openEditModal(itemToEdit);
+                    }}
+                    className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-md transition-all text-center"
+                  >
+                    ✏️ Edit Batch Details
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setViewingItem(null)}

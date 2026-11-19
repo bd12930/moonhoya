@@ -1,4 +1,8 @@
+import Link from 'next/link';
+import { cookies } from 'next/headers';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { SESSION_COOKIE } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/access';
 import {
   DEFAULT_CATEGORIES,
   DEFAULT_CURRENCY,
@@ -115,6 +119,9 @@ async function getInventoryData(): Promise<{
 
 export default async function MoonhoyaDashboard() {
   const { items, currency, categories, locations, potSizes, error } = await getInventoryData();
+  const cookieStore = await cookies();
+  const currentUser = await getCurrentUser(cookieStore.get(SESSION_COOKIE)?.value);
+  const isAdmin = currentUser?.role === 'admin';
 
   return (
     <div className="min-h-screen bg-emerald-50/20 text-slate-800 flex flex-col">
@@ -132,6 +139,7 @@ export default async function MoonhoyaDashboard() {
         categories={categories}
         locations={locations}
         potSizes={potSizes}
+        isAdmin={isAdmin}
       />
 
       {/* Required Footer Page */}
@@ -142,14 +150,21 @@ export default async function MoonhoyaDashboard() {
             <span>Moonhoya Nursery Management System</span>
           </div>
           <div className="flex items-center gap-4">
+            {currentUser && (
+              <div className="flex items-center gap-3 text-slate-600 font-medium">
+                <Link href="/account" className="hover:text-emerald-800 underline-offset-2 hover:underline">
+                  Account ({currentUser.username})
+                </Link>
+                {isAdmin && (
+                  <Link href="/admin/users" className="hover:text-emerald-800 underline-offset-2 hover:underline">
+                    Manage users
+                  </Link>
+                )}
+              </div>
+            )}
             <div className="text-slate-600 font-medium">
               Design by Budi Setiawan - 18 November 2026
             </div>
-            <form action="/api/auth/logout" method="post">
-              <button type="submit" className="text-emerald-700 hover:text-emerald-900 font-semibold underline-offset-2 hover:underline">
-                Log out
-              </button>
-            </form>
           </div>
         </div>
       </footer>

@@ -2,14 +2,15 @@
  * Login and session helpers for the Moonhoya app.
  *
  * - Usernames are matched case-insensitively (stored lowercase).
- * - Passwords are case-sensitive and stored only as PBKDF2-SHA256 hashes.
+ * - Passwords are case-sensitive and stored only as PBKDF2-SHA256 hashes in the D1 AppUser table.
  * - Sessions are an HMAC-signed cookie. The signing key is the AUTH_SECRET
  *   environment variable (Wrangler secret in production, .dev.vars locally).
  *   If AUTH_SECRET is missing, login and session checks fail closed.
  */
 
 export const SESSION_COOKIE = 'moonhoya_session';
-export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7; // 7 days
+/** Sliding idle timeout: every authenticated request re-issues the cookie with a fresh 10-minute expiry. */
+export const SESSION_IDLE_SECONDS = 60 * 10;
 
 const PBKDF2_ITERATIONS = 100_000; // Workers Web Crypto limit
 
@@ -21,16 +22,8 @@ export interface AppUser {
   passwordHash: string;
 }
 
-/**
- * Users. Every account starts with the default password "setiawan".
- * To change a password, replace its hash with the output of `hashPassword()`.
- */
-export const USERS: AppUser[] = [
-  { username: 'budi', role: 'admin', passwordHash: 'pbkdf2-sha256$100000$XO73EcLfwIdpIJyvYlfWUA==$oCFpw6AOpGQc7rJnn9wTJAfyzwjHsKxxd3rk4QSZ32A=' },
-  { username: 'shitarini', role: 'staff', passwordHash: 'pbkdf2-sha256$100000$R9Zc8dggVM5fSA3EbEEyQQ==$2v1xBvqdGqC0xOWm3XjUxAWAnu3vIhdLNyQXKT81DlM=' },
-  { username: 'andy', role: 'staff', passwordHash: 'pbkdf2-sha256$100000$/cDnxYWGqPRj3cfDAlbfBw==$ZcrKPqH2i0EXw3RzGuy2oh3c8nr+qF88i4r/j7cmkiQ=' },
-  { username: 'debora', role: 'staff', passwordHash: 'pbkdf2-sha256$100000$7o89dsGpnb1+2q9ddziL4Q==$keddDkMnkhc+Rcl2rp4g539L7g8nQxrYTrUOsMnWVIs=' },
-];
+/** Minimum length for a new password. Passwords are case-sensitive. */
+export const MIN_PASSWORD_LENGTH = 6;
 
 const encoder = new TextEncoder();
 
@@ -78,9 +71,9 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return constantTimeEqual(hash, fromBase64(hashB64));
 }
 
-export function findUser(username: string): AppUser | undefined {
-  const normalized = username.trim().toLowerCase();
-  return USERS.find((u) => u.username === normalized);
+/** Usernames are stored lowercase; lookups are case-insensitive. */
+export function normalizeUsername(username: string): string {
+  return username.trim().toLowerCase();
 }
 
 async function hmacKey(secret: string): Promise<CryptoKey> {
@@ -103,10 +96,20 @@ export interface Session {
 export async function createSessionToken(username: string, role: UserRole): Promise<string | null> {
   const secret = process.env.AUTH_SECRET;
   if (!secret) return null;
-  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS;
+  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_IDLE_SECONDS;
   const payload = `${username}.${role}.${expiresAt}`;
   const sig = await crypto.subtle.sign('HMAC', await hmacKey(secret), encoder.encode(payload));
   return `${payload}.${toBase64(new Uint8Array(sig))}`;
+}
+
+export function sessionCookieOptions(secure: boolean) {
+  return {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax' as const,
+    path: '/',
+    maxAge: SESSION_IDLE_SECONDS,
+  };
 }
 
 /** Verifies a session cookie value. Returns null when missing, tampered, expired, or no secret is set. */

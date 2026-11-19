@@ -53,6 +53,14 @@ interface InventoryBatch {
 export default function MobileScannerPage() {
   // Navigation tab: 'scanner' | 'inventory' | 'master'
   const [activeTab, setActiveTab] = useState<'scanner' | 'inventory' | 'master'>('scanner');
+  // Only admins can change or delete inventory batches. The server enforces this too.
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    fetch('/api/auth/session', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setIsAdmin(data?.role === 'admin'))
+      .catch(() => setIsAdmin(false));
+  }, []);
 
   // Dynamic Settings (loaded from Cloudflare D1 /api/settings)
   const [categories, setCategories] = useState<CategorySetting[]>(DEFAULT_CATEGORIES);
@@ -1087,6 +1095,7 @@ export default function MobileScannerPage() {
                     {/* Quick Stock Stepper & CRUD Actions */}
                     <div className="flex items-center justify-between pt-2.5 border-t border-slate-700/60">
                       {/* Quantity quick adjustment buttons */}
+                      {isAdmin ? (
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
@@ -1106,8 +1115,14 @@ export default function MobileScannerPage() {
                           +
                         </button>
                       </div>
+                      ) : (
+                      <span className="text-sm font-bold text-white px-2">
+                        {item.quantity} <span className="text-xs font-normal text-slate-400">units</span>
+                      </span>
+                      )}
 
-                      {/* Edit and Delete Actions */}
+                      {/* Edit and Delete Actions (admins only) */}
+                      {isAdmin && (
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
@@ -1125,6 +1140,7 @@ export default function MobileScannerPage() {
                           🗑️ Delete
                         </button>
                       </div>
+                      )}
                     </div>
                   </div>
                 ))}

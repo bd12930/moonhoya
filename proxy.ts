@@ -1,5 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { SESSION_COOKIE, readSessionToken, safeNextPath } from '@/lib/auth';
+import {
+  SESSION_COOKIE,
+  createSessionToken,
+  readSessionToken,
+  safeNextPath,
+  sessionCookieOptions,
+} from '@/lib/auth';
 
 /** Pages and API routes reachable without a session. */
 const PUBLIC_PATHS = new Set(['/login', '/api/auth/login', '/api/auth/logout']);
@@ -21,7 +27,13 @@ export async function proxy(request: NextRequest) {
   }
 
   if (session) {
-    return NextResponse.next();
+    // Sliding idle window: every authenticated request pushes the expiry forward 10 minutes.
+    const refreshed = await createSessionToken(session.username, session.role);
+    const response = NextResponse.next();
+    if (refreshed) {
+      response.cookies.set(SESSION_COOKIE, refreshed, sessionCookieOptions(request.nextUrl.protocol === 'https:'));
+    }
+    return response;
   }
 
   if (pathname.startsWith('/api/')) {

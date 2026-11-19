@@ -1,11 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { getCloudflareContext } from '@opennextjs/cloudflare';
 import {
   SESSION_COOKIE,
-  SESSION_MAX_AGE_SECONDS,
   createSessionToken,
-  findUser,
+  normalizeUsername,
+  sessionCookieOptions,
   verifyPassword,
 } from '@/lib/auth';
+import { findStoredUser } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,7 +27,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Enter your username and password.' }, { status: 400 });
   }
 
-  const user = findUser(username);
+  const { env } = await getCloudflareContext({ async: true });
+  if (!env.DB) {
+    return NextResponse.json({ error: 'D1 Database binding not found.' }, { status: 500 });
+  }
+
+  const user = await findStoredUser(env.DB, normalizeUsername(username));
   const passwordOk = user ? await verifyPassword(password, user.passwordHash) : false;
 
   if (!user || !passwordOk) {
@@ -38,12 +45,6 @@ export async function POST(request: NextRequest) {
   }
 
   const response = NextResponse.json({ success: true, username: user.username, role: user.role });
-  response.cookies.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    secure: request.nextUrl.protocol === 'https:',
-    sameSite: 'lax',
-    path: '/',
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
+  response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(request.nextUrl.protocol === 'https:'));
   return response;
 }

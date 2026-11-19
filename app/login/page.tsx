@@ -1,7 +1,24 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { Suspense, useState, type FormEvent } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { safeNextPath } from '@/lib/auth';
+
+const SESSION_MESSAGES: Record<string, string> = {
+  idle: 'You were signed out after 10 minutes of inactivity.',
+  expired: 'Your session has expired. Please sign in again.',
+};
+
+function SessionNotice() {
+  const reason = useSearchParams().get('reason') ?? '';
+  const notice = SESSION_MESSAGES[reason];
+  if (!notice) return null;
+  return (
+    <p className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+      {notice}
+    </p>
+  );
+}
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -44,6 +61,10 @@ export default function LoginPage() {
           <h1 className="text-xl font-bold text-emerald-900">Moonhoya Nursery</h1>
           <p className="text-sm text-slate-500 mt-1">Sign in to continue</p>
         </div>
+
+        <Suspense fallback={null}>
+          <SessionNotice />
+        </Suspense>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
