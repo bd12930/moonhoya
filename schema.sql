@@ -12,6 +12,24 @@ CREATE TABLE IF NOT EXISTS PlantSpecies (
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Master catalog photo gallery: up to 5 pictures per PlantSpecies entry
+-- (cap enforced in /api/inventory/scan). PlantSpecies.imageUrl mirrors the first photo as the cover.
+CREATE TABLE IF NOT EXISTS PlantSpeciesPhoto (
+  id TEXT PRIMARY KEY,
+  speciesId TEXT NOT NULL,
+  imageUrl TEXT NOT NULL,
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (speciesId) REFERENCES PlantSpecies(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_species_photo_lookup
+  ON PlantSpeciesPhoto (speciesId, createdAt);
+
+-- Backfill: carry over existing single cover photos into the gallery (idempotent via fixed id)
+INSERT OR IGNORE INTO PlantSpeciesPhoto (id, speciesId, imageUrl)
+  SELECT 'photo-' || id, id, imageUrl FROM PlantSpecies
+  WHERE imageUrl IS NOT NULL AND imageUrl <> '';
+
 -- Live inventory batches tracked by pot size, zone, and precise quantities
 CREATE TABLE IF NOT EXISTS InventoryBatch (
   id TEXT PRIMARY KEY,

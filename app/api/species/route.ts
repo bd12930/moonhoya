@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { MAX_PHOTOS_PER_SPECIES } from '../../../lib/species-photos';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,9 +46,27 @@ export async function GET(request: NextRequest) {
       ? env.DB.prepare(query).bind(...bindings)
       : env.DB.prepare(query);
 
-    const { results } = await stmt.all();
+    const { results } = await stmt.all<{ id: string }>();
+    const species: { id: string }[] = results ?? [];
 
-    return NextResponse.json({ success: true, species: results ?? [] });
+    // Attach each kind's photo gallery (oldest first)
+    const { results: photoRows } = await env.DB.prepare(
+      `SELECT speciesId, imageUrl FROM PlantSpeciesPhoto ORDER BY createdAt ASC, id ASC`
+    ).all<{ speciesId: string; imageUrl: string }>();
+
+    const photosBySpecies = new Map<string, string[]>();
+    for (const row of photoRows ?? []) {
+      const list = photosBySpecies.get(row.speciesId) ?? [];
+      list.push(row.imageUrl);
+      photosBySpecies.set(row.speciesId, list);
+    }
+
+    const withPhotos = species.map((s) => {
+      const photos = photosBySpecies.get(s.id) ?? [];
+      return { ...s, photos, photoCount: photos.length };
+    });
+
+    return NextResponse.json({ success: true, species: withPhotos, maxPhotos: MAX_PHOTOS_PER_SPECIES });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ success: false, error: message }, { status: 500 });
@@ -214,7 +233,12 @@ export async function DELETE(request: NextRequest) {
       }, { status: 400 });
     }
 
-    await env.DB.prepare(`DELETE FROM PlantSpecies WHERE id = ?`).bind(id).run();
+    // Photo rows reference the species via FK, so remove them first (same batch = atomic).
+    // R2 objects are left in the bucket; they are not referenced anymore.
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM PlantSpeciesPhoto WHERE speciesId = ?`).bind(id),
+      env.DB.prepare(`DELETE FROM PlantSpecies WHERE id = ?`).bind(id),
+    ]);
 
     return NextResponse.json({ success: true, message: 'Master catalog item deleted successfully.' });
   } catch (err: unknown) {

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { compressImage, formatFileSize, type CompressionResult } from '@/lib/image-compressor';
 import { identifyPlantOnDevice, type PlantAIResult } from '@/lib/plant-ai';
+import { MAX_PHOTOS_PER_SPECIES } from '@/lib/species-photos';
 import {
   DEFAULT_CATEGORIES,
   DEFAULT_CURRENCY,
@@ -28,6 +29,8 @@ interface MasterSpecies {
   waterFrequency: number;
   petSafe: number;
   imageUrl?: string | null;
+  photos?: string[];
+  photoCount?: number;
 }
 
 interface InventoryBatch {
@@ -78,6 +81,13 @@ export default function MobileScannerPage() {
 
   // Step 5: Photo save preference (ask user if new photo should be saved)
   const [saveNewPhoto, setSaveNewPhoto] = useState<boolean>(false);
+
+  // Gallery slots for the matched kind (max MAX_PHOTOS_PER_SPECIES per PlantSpecies)
+  const matchedPhotos = matchedExistingSpecies?.photos ?? [];
+  const photoSlotsUsed = matchedExistingSpecies ? (matchedExistingSpecies.photoCount ?? matchedPhotos.length) : 0;
+  const slotsFull = !!matchedExistingSpecies && photoSlotsUsed >= MAX_PHOTOS_PER_SPECIES;
+  // A new photo is only saved when the user chose it AND a slot is free
+  const willSavePhoto = saveNewPhoto && !slotsFull;
 
   // Step 6: Inventory Batch inputs
   const [formCommonName, setFormCommonName] = useState('');
@@ -258,8 +268,8 @@ export default function MobileScannerPage() {
       setFormPetSafe(existing.petSafe);
       setFormDescription(existing.description || '');
 
-      // By default: ask user if new photo should be saved, or use existing in DB
-      setSaveNewPhoto(existing.imageUrl ? false : true);
+      // Default: keep the gallery if it has photos; otherwise offer to save the new one
+      setSaveNewPhoto((existing.photoCount ?? 0) === 0);
     } else {
       // New kind / variety detected!
       setMatchedExistingSpecies(null);
@@ -304,16 +314,13 @@ export default function MobileScannerPage() {
       formData.append('petSafe', formPetSafe.toString());
       formData.append('description', formDescription);
 
-      // Photo handling: save new compressed picture OR use existing from DB
-      formData.append('savePhoto', saveNewPhoto ? 'true' : 'false');
+      // Photo handling: append new compressed picture only if a gallery slot is free
+      formData.append('savePhoto', willSavePhoto ? 'true' : 'false');
       if (matchedExistingSpecies) {
         formData.append('speciesId', matchedExistingSpecies.id);
-        if (matchedExistingSpecies.imageUrl) {
-          formData.append('existingImageUrl', matchedExistingSpecies.imageUrl);
-        }
       }
 
-      if (saveNewPhoto && capturedPhoto) {
+      if (willSavePhoto && capturedPhoto) {
         formData.append('photo', capturedPhoto);
       }
 
@@ -695,26 +702,46 @@ export default function MobileScannerPage() {
               {/* Existing Species Card */}
               {matchedExistingSpecies && (
                 <div className="p-3.5 bg-slate-900/60 rounded-xl border border-slate-700 mb-4">
-                  <div className="flex items-center gap-3">
-                    {matchedExistingSpecies.imageUrl ? (
-                      <img
-                        src={matchedExistingSpecies.imageUrl}
-                        alt="Existing Catalog Entry"
-                        className="w-14 h-14 rounded-lg object-cover border border-slate-700"
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-lg bg-slate-800 flex items-center justify-center text-2xl border border-slate-700">
-                        🌿
-                      </div>
-                    )}
-                    <div className="flex-1">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
                       <div className="text-xs text-blue-400 font-semibold">Matched Master Record</div>
                       <div className="font-bold text-white text-base">{matchedExistingSpecies.commonName}</div>
                       <div className="text-xs italic text-slate-400">{matchedExistingSpecies.botanicalName}</div>
                     </div>
+                    <span
+                      className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                        slotsFull
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                          : 'bg-slate-800 text-slate-300 border-slate-700'
+                      }`}
+                    >
+                      {photoSlotsUsed}/{MAX_PHOTOS_PER_SPECIES} slots used
+                    </span>
                   </div>
 
-                  {/* USER PHOTO CHOICE REQUIREMENT: Ask user if new picture should be saved */}
+                  {/* Photo gallery: existing pictures + empty slots */}
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {Array.from({ length: MAX_PHOTOS_PER_SPECIES }).map((_, i) => {
+                      const url = matchedPhotos[i];
+                      return url ? (
+                        <img
+                          key={`${url}-${i}`}
+                          src={url}
+                          alt={`${matchedExistingSpecies.commonName} photo ${i + 1}`}
+                          className="aspect-square w-full rounded-lg object-cover border border-slate-700"
+                        />
+                      ) : (
+                        <div
+                          key={`empty-${i}`}
+                          className="aspect-square w-full rounded-lg bg-slate-800/60 border border-dashed border-slate-700 flex items-center justify-center text-slate-600 text-lg"
+                        >
+                          🌿
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* USER PHOTO CHOICE: add a new picture only while a slot is free */}
                   <div className="mt-4 pt-3 border-t border-slate-800">
                     <div className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-1.5">
                       <span>📸</span> Picture Storage Option:
@@ -725,26 +752,35 @@ export default function MobileScannerPage() {
                         type="button"
                         onClick={() => setSaveNewPhoto(false)}
                         className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
-                          !saveNewPhoto
+                          !willSavePhoto
                             ? 'border-emerald-400 bg-emerald-950/60 text-white font-semibold'
                             : 'border-slate-700 bg-slate-800/50 text-slate-400'
                         }`}
                       >
-                        <div className="font-bold text-slate-200">🖼️ Keep Existing Photo</div>
+                        <div className="font-bold text-slate-200">🖼️ Keep Existing Photos</div>
                         <div className="text-[11px] text-emerald-400 mt-0.5">Saves storage space (0 KB added)</div>
                       </button>
 
                       <button
                         type="button"
+                        disabled={slotsFull}
                         onClick={() => setSaveNewPhoto(true)}
                         className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
-                          saveNewPhoto
-                            ? 'border-emerald-400 bg-emerald-950/60 text-white font-semibold'
-                            : 'border-slate-700 bg-slate-800/50 text-slate-400'
+                          slotsFull
+                            ? 'border-slate-800 bg-slate-900/60 text-slate-600 cursor-not-allowed'
+                            : willSavePhoto
+                              ? 'border-emerald-400 bg-emerald-950/60 text-white font-semibold'
+                              : 'border-slate-700 bg-slate-800/50 text-slate-400'
                         }`}
                       >
-                        <div className="font-bold text-slate-200">📸 Save New Compressed Photo</div>
-                        <div className="text-[11px] text-slate-400 mt-0.5">Updates catalog photo (~50 KB)</div>
+                        <div className="font-bold text-slate-200">
+                          {slotsFull ? '🔒 All slots used' : '📸 Add New Photo'}
+                        </div>
+                        <div className="text-[11px] mt-0.5 text-slate-400">
+                          {slotsFull
+                            ? `Limit is ${MAX_PHOTOS_PER_SPECIES} photos per kind`
+                            : `Adds slot ${photoSlotsUsed + 1} of ${MAX_PHOTOS_PER_SPECIES} (~50 KB)`}
+                        </div>
                       </button>
                     </div>
                   </div>

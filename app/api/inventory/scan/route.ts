@@ -1,9 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { MAX_PHOTOS_PER_SPECIES } from '../../../../lib/species-photos';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
+  let uploadedKey: string | null = null;
+
   try {
     const { env } = await getCloudflareContext({ async: true });
 
@@ -26,7 +29,6 @@ export async function POST(request: NextRequest) {
     // Photo & saving options
     const file = formData.get('photo') as File | null;
     const savePhoto = formData.get('savePhoto') === 'true';
-    const existingImageUrl = (formData.get('existingImageUrl') as string) || null;
 
     // Master species metadata
     let speciesId = (formData.get('speciesId') as string) || null;
@@ -37,73 +39,125 @@ export async function POST(request: NextRequest) {
     const petSafe = (formData.get('petSafe') as string) === '1' ? 1 : 0;
     const description = (formData.get('description') as string) || '';
 
-    // 2. Photo storage optimization
-    // Only upload to R2 if the user explicitly opted to save the new photo
-    let photoUrl: string | null = existingImageUrl;
-
-    if (savePhoto && file && file.size > 0 && env.MOONHOYA_PHOTOS) {
-      const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-      const filename = `${category.toLowerCase()}-${Date.now()}-${sanitizedName}`;
-
-      await env.MOONHOYA_PHOTOS.put(filename, file.stream(), {
-        httpMetadata: { contentType: file.type || 'image/webp' },
-      });
-
-      photoUrl = `https://pub-r2.moonhoya.com/${filename}`;
-    }
-
-    // 3. Resolve or create Master Catalog entry (PlantSpecies table)
+    // 2. Resolve the master catalog entry (PlantSpecies) before touching R2,
+    //    so the photo cap can be checked up front.
     let isNewMasterItem = false;
+    let coverImageUrl: string | null = null;
 
     if (speciesId) {
-      // Existing species selected: update imageUrl if a new photo was uploaded
-      if (savePhoto && photoUrl && photoUrl !== existingImageUrl) {
-        await env.DB.prepare(
-          `UPDATE PlantSpecies SET imageUrl = ? WHERE id = ?`
-        ).bind(photoUrl, speciesId).run();
+      const row = await env.DB.prepare(
+        `SELECT id, imageUrl FROM PlantSpecies WHERE id = ?`
+      ).bind(speciesId).first<{ id: string; imageUrl: string | null }>();
+
+      if (!row) {
+        return NextResponse.json({ error: 'Master catalog entry not found.' }, { status: 404 });
       }
+      coverImageUrl = row.imageUrl;
     } else {
-      // Check if species with this botanicalName / identifier already exists
       const existingRecord = await env.DB.prepare(
         `SELECT id, imageUrl FROM PlantSpecies WHERE botanicalName = ?`
-      ).bind(botanicalName).first<{ id: string; imageUrl?: string }>();
+      ).bind(botanicalName).first<{ id: string; imageUrl: string | null }>();
 
       if (existingRecord) {
         speciesId = existingRecord.id;
-        if (!photoUrl && existingRecord.imageUrl) {
-          photoUrl = existingRecord.imageUrl;
-        } else if (savePhoto && photoUrl && photoUrl !== existingRecord.imageUrl) {
-          await env.DB.prepare(`UPDATE PlantSpecies SET imageUrl = ? WHERE id = ?`).bind(photoUrl, speciesId).run();
-        }
+        coverImageUrl = existingRecord.imageUrl;
       } else {
-        // Register brand new kind in Master Database
         speciesId = `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         isNewMasterItem = true;
-
-        await env.DB.prepare(`
-          INSERT INTO PlantSpecies (id, category, commonName, botanicalName, description, sunReq, waterFrequency, petSafe, imageUrl)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          speciesId,
-          category,
-          commonName,
-          botanicalName,
-          description,
-          sunReq,
-          waterFrequency,
-          petSafe,
-          photoUrl
-        ).run();
       }
     }
 
-    // 4. Build collision-resistant SKU for inventory batch
+    const countRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM PlantSpeciesPhoto WHERE speciesId = ?`
+    ).bind(speciesId).first<{ count: number }>();
+    let photoCount = countRow?.count ?? 0;
+
+    // 3. Photo storage: only when the user opted in and a file was sent
+    const wantsNewPhoto = savePhoto && !!file && file.size > 0;
+
+    if (wantsNewPhoto && photoCount >= MAX_PHOTOS_PER_SPECIES) {
+      return NextResponse.json(
+        {
+          error: `This kind already has ${MAX_PHOTOS_PER_SPECIES} photos. Remove one before adding another.`,
+          photoCount,
+          maxPhotos: MAX_PHOTOS_PER_SPECIES,
+        },
+        { status: 409 }
+      );
+    }
+
+    let newPhotoUrl: string | null = null;
+
+    if (wantsNewPhoto && file && env.MOONHOYA_PHOTOS) {
+      const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+      uploadedKey = `${category.toLowerCase()}-${Date.now()}-${sanitizedName}`;
+
+      await env.MOONHOYA_PHOTOS.put(uploadedKey, file.stream(), {
+        httpMetadata: { contentType: file.type || 'image/webp' },
+      });
+
+      newPhotoUrl = `https://pub-r2.moonhoya.com/${uploadedKey}`;
+    }
+
+    // 4. Create the master entry if this is a new kind
+    if (isNewMasterItem) {
+      await env.DB.prepare(`
+        INSERT INTO PlantSpecies (id, category, commonName, botanicalName, description, sunReq, waterFrequency, petSafe, imageUrl)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+      `).bind(
+        speciesId,
+        category,
+        commonName,
+        botanicalName,
+        description,
+        sunReq,
+        waterFrequency,
+        petSafe
+      ).run();
+    }
+
+    // 5. Append the new photo. The cap is enforced inside the INSERT itself,
+    //    so two concurrent scans cannot both take the last slot.
+    if (newPhotoUrl) {
+      const photoId = `photo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const insert = await env.DB.prepare(`
+        INSERT INTO PlantSpeciesPhoto (id, speciesId, imageUrl)
+        SELECT ?, ?, ?
+        WHERE (SELECT COUNT(*) FROM PlantSpeciesPhoto WHERE speciesId = ?) < ?
+      `).bind(photoId, speciesId, newPhotoUrl, speciesId, MAX_PHOTOS_PER_SPECIES).run();
+
+      if (!insert.meta.changes) {
+        // Lost a race for the last slot: remove the orphaned upload.
+        await env.MOONHOYA_PHOTOS?.delete(uploadedKey!);
+        uploadedKey = null;
+        return NextResponse.json(
+          {
+            error: `This kind already has ${MAX_PHOTOS_PER_SPECIES} photos. Remove one before adding another.`,
+            maxPhotos: MAX_PHOTOS_PER_SPECIES,
+          },
+          { status: 409 }
+        );
+      }
+
+      photoCount += 1;
+      uploadedKey = null; // now referenced by the DB, keep it
+
+      // First photo becomes the cover if none is set yet
+      if (!coverImageUrl) {
+        await env.DB.prepare(
+          `UPDATE PlantSpecies SET imageUrl = ? WHERE id = ? AND (imageUrl IS NULL OR imageUrl = '')`
+        ).bind(newPhotoUrl, speciesId).run();
+        coverImageUrl = newPhotoUrl;
+      }
+    }
+
+    // 6. Build collision-resistant SKU for inventory batch
     const catPrefix = category === 'PLANT' ? 'MH' : category.substring(0, 3).toUpperCase();
     const cleanCode = botanicalName.replace(/[^a-zA-Z0-9]/g, '').substring(0, 6).toUpperCase();
     const potLabel = potSize > 0 ? `-${potSize}IN` : '';
     const sku = `${catPrefix}-${cleanCode}${potLabel}-${zone.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase()}`;
 
-    // 5. Update or create Inventory Batch
+    // 7. Update or create Inventory Batch
     const existingBatch = await env.DB.prepare(`
       SELECT id, quantity FROM InventoryBatch
       WHERE speciesId = ? AND potSizeInches = ? AND greenhouseZone = ?
@@ -134,16 +188,29 @@ export async function POST(request: NextRequest) {
       success: true,
       app: 'Moonhoya',
       category,
+      speciesId,
       isNewMasterItem,
       commonName,
       botanicalName,
-      photoUrl,
+      photoUrl: coverImageUrl,
+      photoCount,
+      maxPhotos: MAX_PHOTOS_PER_SPECIES,
+      addedPhotoUrl: newPhotoUrl,
       batch: batchResult,
       message: isNewMasterItem
         ? `🌟 Registered new ${category.toLowerCase()}: "${commonName}" & created stock batch (+${qtyToAdd} units)!`
         : `✅ Updated inventory for "${commonName}" (+${qtyToAdd} units in ${zone}).`,
     });
   } catch (err: unknown) {
+    // Don't leave an unreferenced R2 object behind if the request failed after upload
+    if (uploadedKey) {
+      try {
+        const { env } = await getCloudflareContext({ async: true });
+        await env.MOONHOYA_PHOTOS?.delete(uploadedKey);
+      } catch {
+        // best-effort cleanup
+      }
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 500 });
   }
