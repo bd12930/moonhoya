@@ -141,8 +141,15 @@ export default async function MoonhoyaDashboard() {
             <span>🌿</span>
             <span>Moonhoya Nursery Management System</span>
           </div>
-          <div className="text-slate-600 font-medium">
-            Design by Budi Setiawan - 18 November 2026
+          <div className="flex items-center gap-4">
+            <div className="text-slate-600 font-medium">
+              Design by Budi Setiawan - 18 November 2026
+            </div>
+            <form action="/api/auth/logout" method="post">
+              <button type="submit" className="text-emerald-700 hover:text-emerald-900 font-semibold underline-offset-2 hover:underline">
+                Log out
+              </button>
+            </form>
           </div>
         </div>
       </footer>

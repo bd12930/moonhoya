@@ -43,3 +43,6 @@ next-env.d.ts
 # open-next & cloudflare wrangler
 /.open-next/
 /.wrangler/
+
+# local Wrangler/dev secrets (never commit)
+.dev.vars
