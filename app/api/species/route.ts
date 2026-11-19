@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { SESSION_COOKIE } from '@/lib/auth';
+import { requireAdmin } from '@/lib/access';
 import { MAX_PHOTOS_PER_SPECIES } from '../../../lib/species-photos';
 
 export const dynamic = 'force-dynamic';
@@ -144,6 +146,9 @@ export async function POST(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
+    const denied = await requireAdmin(request.cookies.get(SESSION_COOKIE)?.value);
+    if ('response' in denied) return denied.response;
+
     const { env } = await getCloudflareContext({ async: true });
 
     if (!env.DB) {
@@ -218,6 +223,9 @@ export async function PUT(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const denied = await requireAdmin(request.cookies.get(SESSION_COOKIE)?.value);
+    if ('response' in denied) return denied.response;
+
     const { env } = await getCloudflareContext({ async: true });
 
     if (!env.DB) {
