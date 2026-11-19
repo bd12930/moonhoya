@@ -3,6 +3,7 @@
   "/_not-found/page": "app/_not-found/page.js",
   "/api/inventory/route": "app/api/inventory/route.js",
   "/api/inventory/scan/route": "app/api/inventory/scan/route.js",
+  "/api/photos/[key]/route": "app/api/photos/[key]/route.js",
   "/api/settings/route": "app/api/settings/route.js",
   "/api/species/route": "app/api/species/route.js",
   "/dashboard/page": "app/dashboard/page.js",

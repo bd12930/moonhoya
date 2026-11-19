@@ -43,6 +43,32 @@ const ZERO_DECIMAL_CURRENCIES = ['IDR', 'JPY', 'KRW', 'VND'];
 
 const R2_PUBLIC_BASE = 'https://pub-r2.moonhoya.com/';
 
+type SortKey = 'commonName' | 'sku' | 'sunReq' | 'greenhouseZone' | 'quantity' | 'priceCents';
+
+const SORTABLE_COLUMNS: { key: SortKey; label: string }[] = [
+  { key: 'commonName', label: 'Plant / Item Species' },
+  { key: 'sku', label: 'SKU / Pot' },
+  { key: 'sunReq', label: 'Light Requirement' },
+  { key: 'greenhouseZone', label: 'Greenhouse Zone' },
+  { key: 'quantity', label: 'Stock' },
+  { key: 'priceCents', label: 'Price' },
+];
+
+const SORTABLE_TH = 'py-4 px-4 cursor-pointer select-none hover:bg-emerald-100/70 transition-colors whitespace-nowrap';
+
+function getSortValue(item: DashboardItem, key: SortKey): string | number {
+  switch (key) {
+    case 'quantity':
+    case 'priceCents':
+      return item[key];
+    case 'sku':
+    case 'commonName':
+    case 'sunReq':
+    case 'greenhouseZone':
+      return item[key] ?? '';
+  }
+}
+
 const LIGHT_OPTIONS = [
   { value: 'ALL', label: 'All Light Levels', icon: '☀️' },
   { value: 'INDIRECT_LIGHT', label: 'Indirect Light (Bright Filtered)', icon: '🌤' },
@@ -105,6 +131,11 @@ export default function DashboardClient({ initialItems, currency, categories, lo
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
+  // Sort State
+  const [showSort, setShowSort] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [lightFilter, setLightFilter] = useState('ALL');
@@ -164,6 +195,32 @@ export default function DashboardClient({ initialItems, currency, categories, lo
 
     return true;
   });
+
+  // Sort filtered rows by the chosen column (null = original order)
+  const sortedItems = sortKey
+    ? [...filteredItems].sort((a, b) => {
+        const av = getSortValue(a, sortKey);
+        const bv = getSortValue(b, sortKey);
+        const cmp = typeof av === 'number' && typeof bv === 'number'
+          ? av - bv
+          : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+        return sortDir === 'asc' ? cmp : -cmp;
+      })
+    : filteredItems;
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  }
+
+  function sortIndicator(key: SortKey) {
+    if (sortKey !== key) return '↕';
+    return sortDir === 'asc' ? '↑' : '↓';
+  }
 
   // Dynamic Metrics
   const totalUnits = filteredItems.reduce((sum, item) => sum + item.quantity, 0);
@@ -392,6 +449,16 @@ export default function DashboardClient({ initialItems, currency, categories, lo
             <span>🔍</span>
             <span>{showFilters ? 'Hide Filters' : 'Show Filters'}</span>
           </button>
+          <div className="flex flex-col gap-2 items-start">
+            <button
+              type="button"
+              onClick={() => setShowSort(!showSort)}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-bold text-xs uppercase tracking-wider transition-colors"
+            >
+              <span>↕️</span>
+              <span>{showSort ? 'Hide Sort' : 'Show Sort'}</span>
+            </button>
+          </div>
           <span className="text-xs text-slate-500 font-medium">
             Showing {filteredItems.length} of {items.length} items
           </span>
@@ -511,6 +578,61 @@ export default function DashboardClient({ initialItems, currency, categories, lo
       )}
 
       {/* INVENTORY TABLE */}
+      {/* Collapsible Sort Section */}
+      {showSort && (
+        <section className="bg-white border border-emerald-200/90 rounded-2xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center gap-3 transition-all duration-300 ease-in-out">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">↕️</span>
+            <span className="font-bold text-slate-900 text-sm uppercase tracking-wide">Sort Inventory</span>
+          </div>
+          <select
+            value={sortKey ?? ''}
+            onChange={(e) => {
+              const v = e.target.value as SortKey | '';
+              setSortKey(v === '' ? null : v);
+              setSortDir('asc');
+            }}
+            className="px-3 py-2 rounded-xl border border-emerald-200 bg-white text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+          >
+            <option value="">Default order</option>
+            {SORTABLE_COLUMNS.map((col) => (
+              <option key={col.key} value={col.key}>{col.label}</option>
+            ))}
+          </select>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSortDir('asc')}
+              disabled={!sortKey}
+              className={`px-3 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors disabled:opacity-40 ${
+                sortDir === 'asc' ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
+              }`}
+            >
+              Ascending ↑
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortDir('desc')}
+              disabled={!sortKey}
+              className={`px-3 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors disabled:opacity-40 ${
+                sortDir === 'desc' ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
+              }`}
+            >
+              Descending ↓
+            </button>
+          </div>
+          {sortKey && (
+            <button
+              type="button"
+              onClick={() => setSortKey(null)}
+              className="text-xs font-bold text-slate-500 hover:text-slate-800 underline underline-offset-2"
+            >
+              Clear sort
+            </button>
+          )}
+        </section>
+      )}
+
       {filteredItems.length === 0 ? (
         <div className="bg-white rounded-2xl border border-emerald-100 p-12 text-center shadow-sm">
           <div className="text-4xl mb-3">🌱</div>
@@ -525,24 +647,34 @@ export default function DashboardClient({ initialItems, currency, categories, lo
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-emerald-50/70 border-b border-emerald-100 text-xs font-bold text-emerald-950 uppercase tracking-wider">
-                  <th className="py-4 px-5">Plant / Item Species</th>
-                  <th className="py-4 px-4">SKU / Pot</th>
-                  <th className="py-4 px-4">
+                  <th className={SORTABLE_TH} onClick={() => toggleSort('commonName')}>
+                    Plant / Item Species <span className="text-emerald-700">{sortIndicator('commonName')}</span>
+                  </th>
+                  <th className={SORTABLE_TH} onClick={() => toggleSort('sku')}>
+                    SKU / Pot <span className="text-emerald-700">{sortIndicator('sku')}</span>
+                  </th>
+                  <th className={SORTABLE_TH} onClick={() => toggleSort('sunReq')}>
                     <span className="flex items-center gap-1">
-                      ☀️ Light Requirement
+                      ☀️ Light Requirement <span className="text-emerald-700">{sortIndicator('sunReq')}</span>
                       <span className="text-[10px] bg-emerald-200/60 text-emerald-900 px-1.5 py-0.5 rounded font-normal normal-case">
                         Update via Scanner
                       </span>
                     </span>
                   </th>
-                  <th className="py-4 px-4">Greenhouse Zone</th>
-                  <th className="py-4 px-4">Stock</th>
-                  <th className="py-4 px-4">Price</th>
+                  <th className={SORTABLE_TH} onClick={() => toggleSort('greenhouseZone')}>
+                    Greenhouse Zone <span className="text-emerald-700">{sortIndicator('greenhouseZone')}</span>
+                  </th>
+                  <th className={SORTABLE_TH} onClick={() => toggleSort('quantity')}>
+                    Stock <span className="text-emerald-700">{sortIndicator('quantity')}</span>
+                  </th>
+                  <th className={SORTABLE_TH} onClick={() => toggleSort('priceCents')}>
+                    Price <span className="text-emerald-700">{sortIndicator('priceCents')}</span>
+                  </th>
                   <th className="py-4 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-emerald-50 text-sm">
-                {filteredItems.map((item) => {
+                {sortedItems.map((item) => {
                   let imageUrls: string[] = [];
                   if (item.imageUrl) {
                     try {

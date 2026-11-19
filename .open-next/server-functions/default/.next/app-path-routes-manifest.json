@@ -3,6 +3,7 @@
   "/_not-found/page": "/_not-found",
   "/api/inventory/route": "/api/inventory",
   "/api/inventory/scan/route": "/api/inventory/scan",
+  "/api/photos/[key]/route": "/api/photos/[key]",
   "/api/settings/route": "/api/settings",
   "/api/species/route": "/api/species",
   "/dashboard/page": "/dashboard",
