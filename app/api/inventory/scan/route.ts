@@ -96,7 +96,8 @@ export async function POST(request: NextRequest) {
         httpMetadata: { contentType: file.type || 'image/webp' },
       });
 
-      newPhotoUrl = `https://pub-r2.moonhoya.com/${uploadedKey}`;
+      // Served by /api/photos/[key] (reads the R2 binding), so no public R2 domain is needed
+      newPhotoUrl = `/api/photos/${uploadedKey}`;
     }
 
     // 4. Create the master entry if this is a new kind
