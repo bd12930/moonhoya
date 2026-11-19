@@ -18,6 +18,9 @@ export interface BatchItem {
   botanicalName: string;
   sunReq: string;
   imageUrl?: string | null;
+  /** Full gallery of the master kind (PlantSpeciesPhoto), oldest first. Added by GET. */
+  photos?: string[];
+  photoCount?: number;
 }
 
 /**
@@ -67,9 +70,27 @@ export async function GET(request: NextRequest) {
       ? env.DB.prepare(query).bind(...bindings)
       : env.DB.prepare(query);
 
-    const { results } = await stmt.all();
+    const { results } = await stmt.all<BatchItem>();
+    const items: BatchItem[] = results ?? [];
 
-    return NextResponse.json({ success: true, items: results ?? [] });
+    // Attach each kind's full photo gallery (oldest first) for the item detail view
+    const { results: photoRows } = await env.DB.prepare(
+      `SELECT speciesId, imageUrl FROM PlantSpeciesPhoto ORDER BY createdAt ASC, id ASC`
+    ).all<{ speciesId: string; imageUrl: string }>();
+
+    const photosBySpecies = new Map<string, string[]>();
+    for (const row of photoRows ?? []) {
+      const list = photosBySpecies.get(row.speciesId) ?? [];
+      list.push(row.imageUrl);
+      photosBySpecies.set(row.speciesId, list);
+    }
+
+    const withPhotos = items.map((item) => {
+      const photos = photosBySpecies.get(item.speciesId) ?? [];
+      return { ...item, photos, photoCount: photos.length };
+    });
+
+    return NextResponse.json({ success: true, items: withPhotos });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ success: false, error: message }, { status: 500 });

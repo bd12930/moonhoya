@@ -25,6 +25,9 @@ export interface DashboardItem {
   botanicalName: string;
   sunReq: string;
   imageUrl?: string;
+  /** Full photo gallery from PlantSpeciesPhoto (oldest first) */
+  photos?: string[];
+  photoCount?: number;
 }
 
 interface DashboardClientProps {
@@ -835,8 +838,11 @@ export default function DashboardClient({ initialItems, currency, categories, lo
 
       {/* VIEW ITEM DETAILS & IMAGE SLIDER MODAL */}
       {viewingItem && (() => {
+        // Prefer the full gallery from PlantSpeciesPhoto; fall back to the legacy cover field
         let imageUrls: string[] = [];
-        if (viewingItem.imageUrl) {
+        if (viewingItem.photos && viewingItem.photos.length > 0) {
+          imageUrls = viewingItem.photos;
+        } else if (viewingItem.imageUrl) {
           try {
             const parsed = JSON.parse(viewingItem.imageUrl);
             if (Array.isArray(parsed)) {

@@ -90,7 +90,24 @@ async function getInventoryData(): Promise<{
       ORDER BY B.updatedAt DESC
     `).all();
 
-    return { items: (results as DashboardItem[]) ?? [], currency, categories, locations, potSizes };
+    // Attach each kind's full photo gallery (oldest first) for the item detail view
+    const { results: photoRows } = await env.DB.prepare(
+      `SELECT speciesId, imageUrl FROM PlantSpeciesPhoto ORDER BY createdAt ASC, id ASC`
+    ).all<{ speciesId: string; imageUrl: string }>();
+
+    const photosBySpecies = new Map<string, string[]>();
+    for (const row of photoRows ?? []) {
+      const list = photosBySpecies.get(row.speciesId) ?? [];
+      list.push(row.imageUrl);
+      photosBySpecies.set(row.speciesId, list);
+    }
+
+    const items = ((results as DashboardItem[]) ?? []).map((item) => {
+      const photos = item.speciesId ? photosBySpecies.get(item.speciesId) ?? [] : [];
+      return { ...item, photos, photoCount: photos.length };
+    });
+
+    return { items, currency, categories, locations, potSizes };
   } catch (err: unknown) {
     return { items: [], currency, categories, locations, potSizes, error: err instanceof Error ? err.message : 'Unknown error' };
   }

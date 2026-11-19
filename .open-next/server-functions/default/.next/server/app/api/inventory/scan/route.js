@@ -1,5 +1,5 @@
 var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/inventory/scan/route.js")
-R.c("server/chunks/[externals]__12s2uxrv8n30f._.js")
+R.c("server/chunks/[root-of-the-server]__0pbhx2xyverta._.js")
 R.c("server/chunks/node_modules_@opennextjs_cloudflare_dist_api_cloudflare-context_178zwtexjzs30.js")
 R.c("server/chunks/_1tggp0xkptb0m._.js")
 R.c("server/chunks/[root-of-the-server]__1v1-l-83czzsr._.js")
