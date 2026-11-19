@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
       FROM PlantSpecies
     `;
 
-    const bindings: any[] = [];
+    const bindings: string[] = [];
     if (category) {
       query += ` WHERE category = ?`;
       bindings.push(category);
@@ -162,7 +162,17 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Species id is required' }, { status: 400 });
     }
 
-    const existing = await env.DB.prepare(`SELECT * FROM PlantSpecies WHERE id = ?`).bind(id).first<any>();
+    const existing = await env.DB.prepare(`SELECT * FROM PlantSpecies WHERE id = ?`).bind(id).first<{
+      id: string;
+      category: string;
+      commonName: string;
+      botanicalName: string;
+      description: string;
+      sunReq: string;
+      waterFrequency: number;
+      petSafe: number;
+      imageUrl: string | null;
+    }>();
     if (!existing) {
       return NextResponse.json({ error: `Species with ID "${id}" not found` }, { status: 404 });
     }

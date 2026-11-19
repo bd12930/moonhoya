@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
  * GET /api/settings
  * Retrieves nursery settings from Cloudflare D1. Falls back to default settings.
  */
-export async function GET(_request: NextRequest) {
+export async function GET() {
   try {
     const { env } = await getCloudflareContext({ async: true });
 
@@ -27,7 +27,7 @@ export async function GET(_request: NextRequest) {
 
     const { results } = await env.DB.prepare(`SELECT key, value FROM AppSetting`).all<{ key: string; value: string }>();
 
-    const settingsMap: Record<string, any> = {};
+    const settingsMap: Record<string, unknown> = {};
     if (results && results.length > 0) {
       for (const row of results) {
         try {
@@ -39,10 +39,10 @@ export async function GET(_request: NextRequest) {
     }
 
     const mergedSettings: AppSettingsData = {
-      categories: settingsMap.categories || DEFAULT_SETTINGS.categories,
-      currency: settingsMap.currency || DEFAULT_SETTINGS.currency,
-      locations: settingsMap.locations || DEFAULT_SETTINGS.locations,
-      potSizes: settingsMap.potSizes || DEFAULT_SETTINGS.potSizes,
+      categories: (settingsMap.categories as AppSettingsData['categories'] | undefined) || DEFAULT_SETTINGS.categories,
+      currency: (settingsMap.currency as AppSettingsData['currency'] | undefined) || DEFAULT_SETTINGS.currency,
+      locations: (settingsMap.locations as AppSettingsData['locations'] | undefined) || DEFAULT_SETTINGS.locations,
+      potSizes: (settingsMap.potSizes as AppSettingsData['potSizes'] | undefined) || DEFAULT_SETTINGS.potSizes,
     };
 
     return NextResponse.json({ success: true, settings: mergedSettings, source: 'd1' });

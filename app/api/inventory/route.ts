@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
       JOIN PlantSpecies S ON B.speciesId = S.id
     `;
 
-    const bindings: any[] = [];
+    const bindings: (string | number)[] = [];
     if (category && category !== 'ALL') {
       query += ` WHERE COALESCE(S.category, 'PLANT') = ?`;
       bindings.push(category);
@@ -134,7 +134,15 @@ export async function PUT(request: NextRequest) {
     // Verify batch exists
     const existing = await env.DB.prepare(
       `SELECT id, speciesId, quantity, greenhouseZone, potSizeInches, priceCents, growthStage FROM InventoryBatch WHERE id = ?`
-    ).bind(id).first<any>();
+    ).bind(id).first<{
+      id: string;
+      speciesId: string;
+      quantity: number;
+      greenhouseZone: string;
+      potSizeInches: number;
+      priceCents: number;
+      growthStage: string | null;
+    }>();
 
     if (!existing) {
       return NextResponse.json({ error: `Batch with ID "${id}" not found` }, { status: 404 });

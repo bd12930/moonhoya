@@ -170,7 +170,10 @@ export default function MobileScannerPage() {
       const data = await res.json();
       if (data.success && data.settings) {
         if (data.settings.categories) setCategories(data.settings.categories);
-        if (data.settings.currency) setCurrency(data.settings.currency);
+        if (data.settings.currency) {
+          setCurrency(data.settings.currency);
+          if (data.settings.currency.code === 'IDR') setFormPriceDollars('100000');
+        }
         if (data.settings.locations) {
           setLocations(data.settings.locations);
           if (data.settings.locations.length > 0) setFormZone(data.settings.locations[0]);
@@ -182,46 +185,44 @@ export default function MobileScannerPage() {
     }
   }
 
-  // Sync category changes to default pot size and zone
-  useEffect(() => {
-    if (selectedCategory === 'PLANT') {
+  // Choosing a category applies its default pot size, zone, price and (for non-plants) name.
+  // IDR uses a fixed default unit price (100,000 Rupiah) instead of the preset price.
+  function applyCategoryDefaults(categoryId: string, currencyCode: string) {
+    setSelectedCategory(categoryId);
+    const idrPrice = currencyCode === 'IDR' ? '100000' : null;
+
+    if (categoryId === 'PLANT') {
       setFormPotSize(4);
       setFormZone('Shade House A');
-      setFormPriceDollars('18.00');
-    } else if (selectedCategory === 'FERTILIZER') {
+      setFormPriceDollars(idrPrice ?? '18.00');
+    } else if (categoryId === 'FERTILIZER') {
       setFormPotSize(0);
       setFormZone('Fertilizer Shed');
-      setFormPriceDollars('12.50');
+      setFormPriceDollars(idrPrice ?? '12.50');
       setFormCommonName('Slow-Release Nursery Fertilizer');
       setFormBotanicalName('NPK-14-14-14');
-    } else if (selectedCategory === 'POT') {
+    } else if (categoryId === 'POT') {
       setFormPotSize(4);
       setFormZone('Hardware Bay 3');
-      setFormPriceDollars('3.50');
+      setFormPriceDollars(idrPrice ?? '3.50');
       setFormCommonName('4-Inch Clear Slotted Nursery Pot');
       setFormBotanicalName('POT-SLOT-4');
-    } else if (selectedCategory === 'EQUIPMENT') {
+    } else if (categoryId === 'EQUIPMENT') {
       setFormPotSize(0);
       setFormZone('Hardware Bay 3');
-      setFormPriceDollars('24.00');
+      setFormPriceDollars(idrPrice ?? '24.00');
       setFormCommonName('Precision Pruning Shears');
       setFormBotanicalName('EQP-SHEAR-01');
-    } else if (selectedCategory === 'HARDWARE') {
+    } else if (categoryId === 'HARDWARE') {
       setFormPotSize(0);
       setFormZone('Hardware Bay 3');
-      setFormPriceDollars('6.00');
+      setFormPriceDollars(idrPrice ?? '6.00');
       setFormCommonName('Bamboo Trellis U-Shape');
       setFormBotanicalName('HDW-TRELLIS-U');
+    } else if (idrPrice) {
+      setFormPriceDollars(idrPrice);
     }
-  }, [selectedCategory]);
-
-  // IDR default unit price for new items (100,000 Rupiah). Runs after the category
-  // preset above, and again when the currency finishes loading after mount.
-  useEffect(() => {
-    if (currency.code === 'IDR') {
-      setFormPriceDollars('100000');
-    }
-  }, [selectedCategory, currency.code]);
+  }
 
   async function fetchMasterCatalog() {
     try {
@@ -270,9 +271,10 @@ export default function MobileScannerPage() {
       if (selectedCategory === 'PLANT') {
         await runLocalPlantAI(compressed.dataUrl);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setIsCompressing(false);
-      setFeedbackMessage({ type: 'error', text: `Photo processing error: ${err.message}` });
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setFeedbackMessage({ type: 'error', text: `Photo processing error: ${message}` });
     }
   }
 
@@ -294,7 +296,7 @@ export default function MobileScannerPage() {
 
       // Match against live Master Catalog
       matchWithMasterCatalog(result.topMatch.botanicalName, result.topMatch);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('AI identification error', err);
     } finally {
       setIsAnalyzing(false);
@@ -424,8 +426,8 @@ export default function MobileScannerPage() {
         setMatchedExistingSpecies(null);
         setFormQuantity(1);
       }, 2500);
-    } catch (err: any) {
-      setFeedbackMessage({ type: 'error', text: err.message });
+    } catch (err: unknown) {
+      setFeedbackMessage({ type: 'error', text: err instanceof Error ? err.message : 'Unknown error' });
     } finally {
       setIsSubmitting(false);
     }
@@ -586,7 +588,7 @@ export default function MobileScannerPage() {
                     <button
                       key={cat.id}
                       type="button"
-                      onClick={() => setSelectedCategory(cat.id)}
+                      onClick={() => applyCategoryDefaults(cat.id, currency.code)}
                       className={`min-h-[72px] p-3 rounded-xl border-2 flex flex-col items-center justify-center text-center transition-all ${
                         isSelected
                           ? 'border-emerald-400 bg-emerald-950/70 text-white shadow-lg shadow-emerald-950/50 scale-[1.02]'

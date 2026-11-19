@@ -35,26 +35,27 @@ export default function SettingsPage() {
   const [newPotValue, setNewPotValue] = useState<number>(4);
   const [newPotLabel, setNewPotLabel] = useState('');
 
-  // Load settings on mount
+  // Load settings on mount (isLoading starts as true, so no synchronous setState here)
   useEffect(() => {
-    fetchSettings();
-  }, []);
-
-  async function fetchSettings() {
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/settings');
-      const data = await res.json();
-      if (data.success && data.settings) {
-        setSettings(data.settings);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+        if (!cancelled && data.success && data.settings) {
+          setSettings(data.settings);
+        }
+      } catch (e: unknown) {
+        console.error('Failed to load settings', e);
+        if (!cancelled) setErrorMessage('Could not load settings from database. Using defaults.');
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
-    } catch (e: any) {
-      console.error('Failed to load settings', e);
-      setErrorMessage('Could not load settings from database. Using defaults.');
-    } finally {
-      setIsLoading(false);
-    }
-  }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function saveSettings(updated = settings) {
     setIsSaving(true);
@@ -75,8 +76,8 @@ export default function SettingsPage() {
       } else {
         throw new Error(data.error || 'Failed to save settings');
       }
-    } catch (err: any) {
-      setErrorMessage(err.message);
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setIsSaving(false);
     }
