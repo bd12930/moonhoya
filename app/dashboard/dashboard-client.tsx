@@ -30,6 +30,17 @@ export interface DashboardItem {
   photoCount?: number;
 }
 
+/** Entry from GET /api/species (the recommended catalog) */
+export interface CatalogSpecies {
+  id: string;
+  category: string;
+  commonName: string;
+  botanicalName: string;
+  sunReq: string;
+  photos?: string[];
+  photoCount?: number;
+}
+
 interface DashboardClientProps {
   initialItems: DashboardItem[];
   isAdmin: boolean;
@@ -150,10 +161,42 @@ export default function DashboardClient({ initialItems, currency, categories, lo
   const [editingItem, setEditingItem] = useState<DashboardItem | null>(null);
   const [editPriceText, setEditPriceText] = useState('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  // Species fields: free text with a recommended list from the catalog
+  const [speciesCatalog, setSpeciesCatalog] = useState<CatalogSpecies[]>([]);
+  const [editSpeciesText, setEditSpeciesText] = useState('');
+  const [editBotanicalText, setEditBotanicalText] = useState('');
 
   function openEditModal(item: DashboardItem) {
     setEditPriceText(centsToInputText(item.priceCents, currency.code));
+    setEditSpeciesText(item.commonName);
+    setEditBotanicalText(item.botanicalName);
     setEditingItem(item);
+    fetch('/api/species')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.species)) {
+          setSpeciesCatalog(data.species);
+        }
+      })
+      .catch(() => {
+        // Recommended list is optional; manual entry still works
+      });
+  }
+
+  // Picking an existing catalog entry locks botanical name and takes its light requirement
+  function matchCatalogSpecies(name: string): CatalogSpecies | undefined {
+    const q = name.trim().toLowerCase();
+    if (!q) return undefined;
+    return speciesCatalog.find((s) => s.commonName.trim().toLowerCase() === q);
+  }
+
+  function handleSpeciesTextChange(text: string) {
+    setEditSpeciesText(text);
+    const match = matchCatalogSpecies(text);
+    if (match && editingItem) {
+      setEditBotanicalText(match.botanicalName);
+      setEditingItem({ ...editingItem, sunReq: match.sunReq });
+    }
   }
 
   function markImageFailed(src: string) {
@@ -236,13 +279,56 @@ export default function DashboardClient({ initialItems, currency, categories, lo
       quantity: Math.max(0, Math.round(editingItem.quantity)),
       priceCents: inputTextToCents(editPriceText, currency.code),
     };
+    const typedName = editSpeciesText.trim();
+    const typedBotanical = editBotanicalText.trim();
+    if (!typedName) {
+      alert('Plant / item species name is required.');
+      return;
+    }
+
     setIsSavingEdit(true);
     try {
+      // Resolve which species the batch should point to
+      const catalogMatch = matchCatalogSpecies(typedName);
+      let resolved: CatalogSpecies | null = null;
+      let speciesChanged = false;
+
+      if (catalogMatch) {
+        resolved = catalogMatch;
+        speciesChanged = catalogMatch.id !== updated.speciesId;
+      } else if (typedName.toLowerCase() === updated.commonName.trim().toLowerCase() && typedBotanical === updated.botanicalName) {
+        // Name unchanged: keep the current species
+        resolved = null;
+      } else {
+        if (!typedBotanical) {
+          alert('Botanical name / SKU code is required for a new species.');
+          return;
+        }
+        const createRes = await fetch('/api/species', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            commonName: typedName,
+            botanicalName: typedBotanical,
+            category: updated.category ?? 'PLANT',
+            sunReq: updated.sunReq,
+          }),
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok || !createData.success) {
+          throw new Error(createData.error ?? 'Could not create species');
+        }
+        resolved = createData.species as CatalogSpecies;
+        speciesChanged = true;
+        setSpeciesCatalog((prev) => [...prev, resolved as CatalogSpecies]);
+      }
+
       const res = await fetch('/api/inventory', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: updated.id,
+          ...(speciesChanged && resolved ? { speciesId: resolved.id } : {}),
           quantity: updated.quantity,
           greenhouseZone: updated.greenhouseZone,
           potSizeInches: updated.potSizeInches,
@@ -253,7 +339,19 @@ export default function DashboardClient({ initialItems, currency, categories, lo
 
       const data = await res.json();
       if (res.ok && data.success) {
-        setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+        const applied: DashboardItem = resolved
+          ? {
+              ...updated,
+              speciesId: resolved.id,
+              commonName: resolved.commonName,
+              botanicalName: resolved.botanicalName,
+              category: resolved.category,
+              sunReq: updated.sunReq,
+              photos: resolved.photos ?? [],
+              photoCount: resolved.photoCount ?? 0,
+            }
+          : updated;
+        setItems((prev) => prev.map((it) => (it.id === updated.id ? applied : it)));
         setEditingItem(null);
       }
     } catch (e: unknown) {
@@ -831,6 +929,47 @@ export default function DashboardClient({ initialItems, currency, categories, lo
             </div>
 
             <div className="space-y-3 text-sm">
+              {/* Species - pick from recommended list or type a new name */}
+              <div className="bg-white rounded-xl p-3 border border-slate-200 space-y-2">
+                <label className="block text-xs font-bold text-slate-700">
+                  🌱 Plant / Item Species:
+                  <input
+                    type="text"
+                    list="edit-species-options"
+                    value={editSpeciesText}
+                    onChange={(e) => handleSpeciesTextChange(e.target.value)}
+                    placeholder="Choose from list or type a name"
+                    autoComplete="off"
+                    className="mt-1 w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </label>
+                <datalist id="edit-species-options">
+                  {speciesCatalog
+                    .filter((s) => (s.category || 'PLANT') === (editingItem.category || 'PLANT'))
+                    .map((s) => (
+                      <option key={s.id} value={s.commonName}>
+                        {s.botanicalName}
+                      </option>
+                    ))}
+                </datalist>
+                <label className="block text-xs font-bold text-slate-700">
+                  Botanical Name / SKU Code:
+                  <input
+                    type="text"
+                    value={editBotanicalText}
+                    onChange={(e) => setEditBotanicalText(e.target.value)}
+                    disabled={!!matchCatalogSpecies(editSpeciesText)}
+                    placeholder="Required for a new species"
+                    className="mt-1 w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-100 disabled:text-slate-500"
+                  />
+                </label>
+                <p className="text-[10px] text-slate-500">
+                  {matchCatalogSpecies(editSpeciesText)
+                    ? 'Existing species selected. Its botanical name and light requirement are used.'
+                    : 'New name: a species will be added to the catalog when you save.'}
+                </p>
+              </div>
+
               {/* Light Information - Editable */}
               <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-200">
                 <label className="block text-xs font-bold text-emerald-800 mb-1">
@@ -932,7 +1071,7 @@ export default function DashboardClient({ initialItems, currency, categories, lo
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Price ({currency.code}):</label>
                   <div className="relative">
-                    <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-slate-500 font-mono">
+                    <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-500 font-mono">
                       {currency.symbol}
                     </span>
                     <input
@@ -945,7 +1084,8 @@ export default function DashboardClient({ initialItems, currency, categories, lo
                           centsToInputText(inputTextToCents(editPriceText, currency.code), currency.code)
                         )
                       }
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-12 pr-3 py-2 font-mono text-slate-900"
+                      style={{ paddingLeft: `calc(0.75rem + ${currency.symbol.length}ch + 0.375rem)` }}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl pr-3 py-2 font-mono text-slate-900"
                     />
                   </div>
                 </div>

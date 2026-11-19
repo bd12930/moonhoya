@@ -115,7 +115,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { id, quantity, greenhouseZone, potSizeInches, priceCents, growthStage, sunReq } = body;
+    const { id, quantity, greenhouseZone, potSizeInches, priceCents, growthStage, sunReq, speciesId } = body;
 
     if (!id) {
       return NextResponse.json({ error: 'Batch id is required' }, { status: 400 });
@@ -130,6 +130,18 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: `Batch with ID "${id}" not found` }, { status: 404 });
     }
 
+    // Optional species change: the target species must already exist in the catalog
+    let targetSpeciesId: string = existing.speciesId;
+    if (typeof speciesId === 'string' && speciesId && speciesId !== existing.speciesId) {
+      const species = await env.DB.prepare(`SELECT id FROM PlantSpecies WHERE id = ?`)
+        .bind(speciesId)
+        .first<{ id: string }>();
+      if (!species) {
+        return NextResponse.json({ error: `Species with ID "${speciesId}" not found` }, { status: 404 });
+      }
+      targetSpeciesId = speciesId;
+    }
+
     const updatedQty = typeof quantity === 'number' ? quantity : existing.quantity;
     const updatedZone = greenhouseZone !== undefined ? greenhouseZone : existing.greenhouseZone;
     const updatedPotSize = typeof potSizeInches === 'number' ? potSizeInches : existing.potSizeInches;
@@ -139,6 +151,7 @@ export async function PUT(request: NextRequest) {
     await env.DB.prepare(`
       UPDATE InventoryBatch
       SET
+        speciesId = ?,
         quantity = ?,
         greenhouseZone = ?,
         potSizeInches = ?,
@@ -146,19 +159,19 @@ export async function PUT(request: NextRequest) {
         growthStage = ?,
         updatedAt = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).bind(updatedQty, updatedZone, updatedPotSize, updatedPrice, updatedStage, id).run();
+    `).bind(targetSpeciesId, updatedQty, updatedZone, updatedPotSize, updatedPrice, updatedStage, id).run();
 
-    // If sunReq is provided, update the species record as well
-    if (sunReq && existing.speciesId) {
+    // If sunReq is provided, update the (possibly newly assigned) species record as well
+    if (sunReq && targetSpeciesId) {
       await env.DB.prepare(`
         UPDATE PlantSpecies SET sunReq = ? WHERE id = ?
-      `).bind(sunReq, existing.speciesId).run();
+      `).bind(sunReq, targetSpeciesId).run();
     }
 
     return NextResponse.json({
       success: true,
       message: `Updated batch ${id}. Quantity: ${updatedQty}.${sunReq ? ` Light updated to ${sunReq}.` : ''}`,
-      item: { id, quantity: updatedQty, greenhouseZone: updatedZone, potSizeInches: updatedPotSize, priceCents: updatedPrice, growthStage: updatedStage, sunReq },
+      item: { id, speciesId: targetSpeciesId, quantity: updatedQty, greenhouseZone: updatedZone, potSizeInches: updatedPotSize, priceCents: updatedPrice, growthStage: updatedStage, sunReq },
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
