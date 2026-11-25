@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. Google Gemini Vision API (if key configured)
+    let geminiFailure: string | null = null;
     if (geminiKey) {
       try {
         const base64Data = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
@@ -88,10 +89,18 @@ export async function POST(request: NextRequest) {
               const parsed = JSON.parse(textResponse);
               return NextResponse.json(parsed);
             }
+            console.error(`Gemini (${model}) returned no text:`, JSON.stringify(geminiData).slice(0, 500));
+            geminiFailure = `${model} returned no text`;
+          } else {
+            // Log status and body only; the request URL contains the API key and must not be logged.
+            const errBody = await geminiRes.text();
+            console.error(`Gemini (${model}) HTTP ${geminiRes.status}:`, errBody.slice(0, 500));
+            geminiFailure = `${model} HTTP ${geminiRes.status}`;
           }
         }
       } catch (geminiErr) {
         console.error('Gemini vision error:', geminiErr);
+        geminiFailure = 'request error';
       }
     }
 
@@ -134,7 +143,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // If no cloud AI key is configured, inform user clearly instead of returning a fake guess
+    // A key exists but the provider call failed: report that, not a missing key.
+    if (geminiKey || openaiKey) {
+      return NextResponse.json({
+        classification: null,
+        confidence: 'low',
+        message: `Cloud identification failed${geminiFailure ? ` (Gemini: ${geminiFailure})` : ''}. Please try again, or fill in the details manually.`,
+      } satisfies ScanClassificationResult);
+    }
+
+    // No cloud AI key is configured: tell the user clearly instead of returning a fake guess
     return NextResponse.json({
       classification: null,
       confidence: 'low',
