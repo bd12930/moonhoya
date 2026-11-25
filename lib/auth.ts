@@ -92,9 +92,33 @@ export interface Session {
   expiresAt: number; // unix seconds
 }
 
+/** Resolves AUTH_SECRET from process.env, Cloudflare context, or global fallback. */
+export async function resolveAuthSecret(overrideSecret?: string): Promise<string | null> {
+  if (overrideSecret) return overrideSecret;
+  if (process.env.AUTH_SECRET) return process.env.AUTH_SECRET;
+
+  try {
+    const { getCloudflareContext } = await import('@opennextjs/cloudflare');
+    const { env } = await getCloudflareContext({ async: true });
+    const cfSecret = (env as unknown as Record<string, unknown>)?.AUTH_SECRET;
+    if (typeof cfSecret === 'string' && cfSecret) return cfSecret;
+  } catch {
+    // Cloudflare context unavailable
+  }
+
+  const globalSecret = (globalThis as unknown as Record<string, unknown>)?.AUTH_SECRET;
+  if (typeof globalSecret === 'string' && globalSecret) return globalSecret;
+
+  return null;
+}
+
 /** Creates the cookie value `<username>.<role>.<expiresAt>.<signature>`. Returns null if no secret is set. */
-export async function createSessionToken(username: string, role: UserRole): Promise<string | null> {
-  const secret = process.env.AUTH_SECRET;
+export async function createSessionToken(
+  username: string,
+  role: UserRole,
+  secretOverride?: string
+): Promise<string | null> {
+  const secret = await resolveAuthSecret(secretOverride);
   if (!secret) return null;
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_IDLE_SECONDS;
   const payload = `${username}.${role}.${expiresAt}`;
@@ -113,9 +137,13 @@ export function sessionCookieOptions(secure: boolean) {
 }
 
 /** Verifies a session cookie value. Returns null when missing, tampered, expired, or no secret is set. */
-export async function readSessionToken(token: string | undefined): Promise<Session | null> {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret || !token) return null;
+export async function readSessionToken(
+  token: string | undefined,
+  secretOverride?: string
+): Promise<Session | null> {
+  if (!token) return null;
+  const secret = await resolveAuthSecret(secretOverride);
+  if (!secret) return null;
 
   const parts = token.split('.');
   if (parts.length !== 4) return null;

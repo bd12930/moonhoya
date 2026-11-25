@@ -39,7 +39,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Incorrect username or password.' }, { status: 401 });
   }
 
-  const token = await createSessionToken(user.username, user.role);
+  const envSecret = (env as unknown as Record<string, unknown>)?.AUTH_SECRET as string | undefined;
+  const token = await createSessionToken(user.username, user.role, envSecret);
   if (!token) {
     return NextResponse.json({ error: 'Login is not configured on this server (AUTH_SECRET missing).' }, { status: 500 });
   }

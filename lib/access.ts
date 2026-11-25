@@ -10,10 +10,11 @@ export type CurrentUser = UserSummary;
  * from D1. The DB role wins over the cookie role, so demotions apply immediately.
  */
 export async function getCurrentUser(cookieValue: string | undefined): Promise<CurrentUser | null> {
-  const session = await readSessionToken(cookieValue);
+  const { env } = await getCloudflareContext({ async: true });
+  const envSecret = (env as unknown as Record<string, unknown>)?.AUTH_SECRET as string | undefined;
+  const session = await readSessionToken(cookieValue, envSecret);
   if (!session) return null;
 
-  const { env } = await getCloudflareContext({ async: true });
   if (!env.DB) return null;
 
   const user = await findStoredUser(env.DB, session.username);

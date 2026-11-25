@@ -4,6 +4,17 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { compressImage, formatFileSize, type CompressionResult } from '@/lib/image-compressor';
 import { identifyPlantOnDevice, type PlantAIResult } from '@/lib/plant-ai';
+import { classifyScannedImage, type ScanClassificationResult } from '@/lib/scan-classifier';
+import {
+  initMediaPipeVision,
+  detectSubject,
+  FrameStabilityTracker,
+  evaluateBlurriness,
+  drawTrackingOverlay,
+  captureVideoFrame,
+  type StabilityState,
+  type BlurMetric,
+} from '@/lib/object-tracker';
 import { MAX_PHOTOS_PER_SPECIES } from '@/lib/species-photos';
 import {
   DEFAULT_CATEGORIES,
@@ -105,8 +116,34 @@ export default function MobileScannerPage() {
   const [compressionMetrics, setCompressionMetrics] = useState<CompressionResult | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
 
-  // Step 3: Local AI Identification
+  // Live Camera with ML Object Tracking & Stability Engine
+  const [isLiveCameraActive, setIsLiveCameraActive] = useState(false);
+  const [isCameraLoading, setIsCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [autoCaptureEnabled, setAutoCaptureEnabled] = useState(true);
+  const [stabilityStatus, setStabilityStatus] = useState<StabilityState>({
+    isStable: false,
+    progress: 0,
+    elapsedMs: 0,
+  });
+  const [blurStatus, setBlurStatus] = useState<BlurMetric>({
+    isSharp: true,
+    score: 100,
+    threshold: 65,
+  });
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const trackerRef = useRef<FrameStabilityTracker>(new FrameStabilityTracker(800));
+  const isCapturingRef = useRef(false);
+  const handleCaptureCurrentFrameRef = useRef<() => Promise<void>>(async () => {});
+
+  // Step 3: Local AI Identification & Classification
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [classificationResult, setClassificationResult] = useState<ScanClassificationResult | null>(null);
   const [aiResult, setAiResult] = useState<PlantAIResult | null>(null);
   const [alternativeMatches, setAlternativeMatches] = useState<PlantAIResult[]>([]);
   // Every candidate the on-device AI returned for this photo (saved with the scan)
@@ -248,33 +285,267 @@ export default function MobileScannerPage() {
     }
   }
 
-  // Handle camera capture or image selection
-  async function handlePhotoCapture(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Clean up camera stream when component unmounts
+  useEffect(() => {
+    return () => {
+      stopLiveCamera();
+    };
+  }, []);
 
+  // Request camera and start real-time ML object detection
+  async function startLiveCamera() {
+    setCameraError(null);
+    setIsCameraLoading(true);
+    setCapturedPhoto(null);
+    setPreviewUrl(null);
+    trackerRef.current.reset();
+    isCapturingRef.current = false;
+
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error('Live camera is not supported on this browser or requires HTTPS.');
+      }
+
+      // Initialize MediaPipe vision asynchronously
+      initMediaPipeVision().catch(() => {});
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+      setIsLiveCameraActive(true);
+      setIsCameraLoading(false);
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+    } catch (err: unknown) {
+      setIsCameraLoading(false);
+      setIsLiveCameraActive(false);
+      const msg = err instanceof Error ? err.message : 'Unable to access camera';
+      setCameraError(msg);
+    }
+  }
+
+  // Stop camera stream & cancel detection loop
+  function stopLiveCamera() {
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsLiveCameraActive(false);
+    setIsCameraLoading(false);
+    trackerRef.current.reset();
+    isCapturingRef.current = false;
+  }
+
+  // Frame processing loop: object detection, stability (0.8s) & blurriness check
+  useEffect(() => {
+    if (!isLiveCameraActive) return;
+
+    let mounted = true;
+    const tracker = trackerRef.current;
+    if (!analysisCanvasRef.current) {
+      analysisCanvasRef.current = document.createElement('canvas');
+    }
+
+    const processFrame = () => {
+      if (!mounted) return;
+      const video = videoRef.current;
+      const overlay = overlayCanvasRef.current;
+      const analysis = analysisCanvasRef.current;
+
+      if (video && overlay && analysis && video.readyState >= 2) {
+        const vW = video.videoWidth;
+        const vH = video.videoHeight;
+
+        if (overlay.width !== overlay.clientWidth || overlay.height !== overlay.clientHeight) {
+          overlay.width = overlay.clientWidth;
+          overlay.height = overlay.clientHeight;
+        }
+
+        const now = performance.now();
+
+        // 1. Detect subject via MediaPipe / Foliage Saliency
+        const subject = detectSubject(video, analysis, now);
+
+        // 2. Track bounding box frame stability (~0.8s)
+        const stability = tracker.update(subject, now);
+        setStabilityStatus(stability);
+
+        // 3. Evaluate image sharpness (Laplacian variance on subject area)
+        const blur = evaluateBlurriness(video, subject ?? undefined, 65);
+        setBlurStatus(blur);
+
+        // 4. Render bounding box, corners & stability progress
+        const ctx = overlay.getContext('2d');
+        if (ctx) {
+          drawTrackingOverlay(
+            ctx,
+            subject,
+            stability,
+            blur,
+            overlay.width,
+            overlay.height,
+            vW,
+            vH
+          );
+        }
+
+        // 5. Automatically capture frame when subject is stable for >= 0.8s and sharp
+        if (
+          autoCaptureEnabled &&
+          stability.isStable &&
+          blur.isSharp &&
+          !isCapturingRef.current
+        ) {
+          isCapturingRef.current = true;
+          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+            try { navigator.vibrate(50); } catch {}
+          }
+          handleCaptureCurrentFrameRef.current();
+          return;
+        }
+      }
+
+      animFrameRef.current = requestAnimationFrame(processFrame);
+    };
+
+    animFrameRef.current = requestAnimationFrame(processFrame);
+
+    return () => {
+      mounted = false;
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+    };
+  }, [isLiveCameraActive, autoCaptureEnabled]);
+
+  // Capture current live frame and send to compression & recognition
+  async function handleCaptureCurrentFrame() {
+    if (!videoRef.current) return;
+    try {
+      const file = await captureVideoFrame(videoRef.current, `live-scan-${Date.now()}.jpg`);
+      stopLiveCamera();
+      await processCapturedImage(file);
+    } catch (err: unknown) {
+      isCapturingRef.current = false;
+      const msg = err instanceof Error ? err.message : 'Failed to capture frame';
+      setFeedbackMessage({ type: 'error', text: msg });
+    }
+  }
+  handleCaptureCurrentFrameRef.current = handleCaptureCurrentFrame;
+
+  // Unified image processing for both live stream auto-capture and file upload
+  async function processCapturedImage(file: File) {
     setIsCompressing(true);
     setFeedbackMessage(null);
 
     try {
-      // 1. Client-side image compression (runs locally on phone/tablet)
+      // 1. Client-side image compression
       const compressed = await compressImage(file, 960, 0.72);
       setCapturedPhoto(compressed.file);
       setPreviewUrl(compressed.dataUrl);
       setCompressionMetrics(compressed);
       setIsCompressing(false);
 
-      // Default photo save setting: if it's a new kind, save photo. If existing, default to using existing.
+      // Default photo save setting
       setSaveNewPhoto(true);
 
-      // 2. If item is a Plant, run Local On-Device AI Plant Identifier
-      if (selectedCategory === 'PLANT') {
-        await runLocalPlantAI(compressed.dataUrl);
-      }
+      // 2. Classify object ("plant" vs "item") and identify metadata
+      await runClassificationAndIdentification(compressed.dataUrl);
     } catch (err: unknown) {
       setIsCompressing(false);
       const message = err instanceof Error ? err.message : 'Unknown error';
       setFeedbackMessage({ type: 'error', text: `Photo processing error: ${message}` });
+    }
+  }
+
+  // Handle camera capture or image selection from file input
+  async function handlePhotoCapture(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processCapturedImage(file);
+  }
+
+  // Identify primary object, classify as "plant" or "item", and handle blurriness
+  async function runClassificationAndIdentification(imageDataUrl: string) {
+    setIsAnalyzing(true);
+    setClassificationResult(null);
+    setAiResult(null);
+    setFeedbackMessage(null);
+
+    try {
+      const result = await classifyScannedImage(imageDataUrl);
+      setClassificationResult(result);
+
+      // If image is too blurry, set confidence to low and alert user
+      if (result.confidence === 'low') {
+        setFeedbackMessage({
+          type: 'error',
+          text: result.message || 'Image is too blurry to be certain. Please retake the photo closer.',
+        });
+        return;
+      }
+
+      if (result.classification === 'plant') {
+        setSelectedCategory('PLANT');
+        if (result.commonName) setFormCommonName(result.commonName);
+        if (result.scientificName) setFormBotanicalName(result.scientificName);
+
+        if (result.lightNeeds) {
+          const l = result.lightNeeds.toUpperCase();
+          if (l.includes('FULL')) setFormSunReq('FULL_SUN');
+          else if (l.includes('SHADE') || l.includes('PARTIAL')) setFormSunReq('PARTIAL_SHADE');
+          else setFormSunReq('INDIRECT_LIGHT');
+        }
+
+        if (result.wateringNeeds) {
+          const daysMatch = result.wateringNeeds.match(/\d+/);
+          if (daysMatch) setFormWaterFrequency(parseInt(daysMatch[0], 10));
+        }
+
+        // Match with master catalog or run botanical profile
+        if (result.scientificName) {
+          matchWithMasterCatalog(result.scientificName);
+        }
+        await runLocalPlantAI(imageDataUrl);
+      } else if (result.classification === 'item') {
+        const itemCat = result.category || 'EQUIPMENT';
+        applyCategoryDefaults(itemCat, currency.code);
+
+        if (result.productName) {
+          setFormCommonName(result.productName);
+          setFormBotanicalName(result.productName);
+        }
+        if (result.primaryFunction) {
+          setFormDescription(result.primaryFunction);
+        }
+
+        setMatchedExistingSpecies(null);
+        setIsNewKind(true);
+      }
+    } catch (err: unknown) {
+      console.error('Classification error:', err);
+      // Fall back to local plant matcher
+      await runLocalPlantAI(imageDataUrl);
+    } finally {
+      setIsAnalyzing(false);
     }
   }
 
@@ -421,6 +692,7 @@ export default function MobileScannerPage() {
         setCapturedPhoto(null);
         setPreviewUrl(null);
         setCompressionMetrics(null);
+        setClassificationResult(null);
         setAiResult(null);
         setAiDetections([]);
         setMatchedExistingSpecies(null);
@@ -617,111 +889,351 @@ export default function MobileScannerPage() {
                     ⚡ {compressionMetrics.reductionPercentage}% Compressed
                   </span>
                 )}
+                {isLiveCameraActive && (
+                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs px-2.5 py-0.5 rounded-full font-mono font-medium animate-pulse">
+                    ● LIVE ML TRACKING
+                  </span>
+                )}
               </div>
 
-              {/* Action buttons: Camera & Gallery */}
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="min-h-[58px] bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold text-base rounded-xl flex items-center justify-center gap-2.5 shadow-md shadow-emerald-950/40 transition-colors"
-                >
-                  <span className="text-2xl">📸</span>
-                  <span>Take Photo</span>
-                </button>
+              {/* Camera Error Alert */}
+              {cameraError && (
+                <div className="p-3 mb-3 bg-red-950/60 border border-red-800/80 rounded-xl text-xs text-red-200 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">⚠️</span>
+                    <span>{cameraError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCameraError(null)}
+                    className="text-red-400 hover:text-white font-bold ml-2 text-sm px-1.5 py-0.5 rounded"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
-                <button
-                  type="button"
-                  onClick={() => galleryInputRef.current?.click()}
-                  className="min-h-[58px] bg-slate-700 hover:bg-slate-600 active:bg-slate-800 text-slate-200 font-bold text-base rounded-xl border border-slate-600 flex items-center justify-center gap-2.5 transition-colors"
-                >
-                  <span className="text-2xl">🖼️</span>
-                  <span>Photo Library</span>
-                </button>
-              </div>
+              {/* LIVE CAMERA VIEWFINDER WITH REAL-TIME BOUNDING BOX & STABILITY HUD */}
+              {isLiveCameraActive && (
+                <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500/50 bg-black shadow-2xl mb-4">
+                  <video
+                    ref={videoRef}
+                    playsInline
+                    muted
+                    autoPlay
+                    className="w-full h-80 object-cover"
+                  />
+                  <canvas
+                    ref={overlayCanvasRef}
+                    className="absolute inset-0 w-full h-full pointer-events-none"
+                  />
+
+                  {/* Top Bar Status */}
+                  <div className="absolute top-2.5 inset-x-2.5 flex items-center justify-between gap-2 z-10">
+                    <div className="flex items-center gap-1.5 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded-full border border-slate-700/80 text-xs shadow-md">
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          stabilityStatus.isStable && blurStatus.isSharp
+                            ? 'bg-emerald-400 animate-ping'
+                            : !blurStatus.isSharp
+                            ? 'bg-amber-400'
+                            : 'bg-sky-400 animate-pulse'
+                        }`}
+                      />
+                      <span className="font-semibold text-slate-200">
+                        {!blurStatus.isSharp
+                          ? 'Adjusting Focus...'
+                          : stabilityStatus.isStable
+                          ? 'Target Locked (0.8s)'
+                          : `Hold Steady (${Math.round(stabilityStatus.progress * 100)}%)`}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setAutoCaptureEnabled((v) => !v)}
+                        className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors shadow-md ${
+                          autoCaptureEnabled
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : 'bg-slate-900/80 text-slate-400 border-slate-700'
+                        }`}
+                        title="Toggle automatic capture when subject is steady for ~0.8s"
+                      >
+                        {autoCaptureEnabled ? '⚡ Auto ON' : '✋ Auto OFF'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={stopLiveCamera}
+                        className="bg-slate-900/85 hover:bg-slate-800 text-slate-300 p-1 rounded-full border border-slate-700 text-xs w-7 h-7 flex items-center justify-center shadow-md"
+                        title="Close Camera Viewfinder"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Stability & Blur Metrics Bar */}
+                  <div className="absolute bottom-16 inset-x-4 z-10 flex flex-col items-center pointer-events-none">
+                    <div className="w-full max-w-xs bg-slate-950/85 backdrop-blur-md border border-slate-700/80 rounded-xl p-2.5 flex items-center gap-3 shadow-lg">
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between text-[11px] mb-1">
+                          <span className="text-slate-300 font-medium">Stability (0.8s)</span>
+                          <span
+                            className={`font-mono font-bold ${
+                              stabilityStatus.isStable ? 'text-emerald-400' : 'text-sky-300'
+                            }`}
+                          >
+                            {Math.round(stabilityStatus.progress * 100)}%
+                          </span>
+                        </div>
+                        <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-75 ${
+                              stabilityStatus.isStable
+                                ? 'bg-emerald-400'
+                                : 'bg-gradient-to-r from-sky-400 to-emerald-400'
+                            }`}
+                            style={{ width: `${stabilityStatus.progress * 100}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="text-right border-l border-slate-800 pl-2.5">
+                        <div className="text-[10px] text-slate-400 uppercase font-semibold">Sharpness</div>
+                        <span
+                          className={`text-xs font-mono font-bold ${
+                            blurStatus.isSharp ? 'text-emerald-400' : 'text-amber-400'
+                          }`}
+                        >
+                          {blurStatus.isSharp ? 'Sharp' : 'Blurry'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Manual Shutter Button */}
+                  <div className="absolute bottom-2.5 inset-x-0 flex items-center justify-center z-10">
+                    <button
+                      type="button"
+                      onClick={handleCaptureCurrentFrame}
+                      className="group relative flex items-center justify-center p-1 rounded-full active:scale-95 transition-transform"
+                      title="Snap Current Frame"
+                    >
+                      <span
+                        className={`absolute inset-0 rounded-full border-2 transition-all ${
+                          stabilityStatus.isStable && blurStatus.isSharp
+                            ? 'border-emerald-400 shadow-lg shadow-emerald-500/50 scale-110'
+                            : 'border-white/50'
+                        }`}
+                      />
+                      <span className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-lg text-slate-950 font-bold text-lg group-hover:bg-emerald-50">
+                        📸
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ACTION BUTTONS (When live camera is inactive) */}
+              {!isLiveCameraActive && !previewUrl && (
+                <div className="space-y-2.5 mb-4">
+                  <button
+                    type="button"
+                    onClick={startLiveCamera}
+                    disabled={isCameraLoading}
+                    className="w-full min-h-[58px] bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:from-emerald-700 active:to-teal-700 text-white font-bold text-base rounded-xl flex items-center justify-center gap-3 shadow-lg shadow-emerald-950/50 transition-all border border-emerald-400/30"
+                  >
+                    <span className="text-2xl animate-pulse">🎥</span>
+                    <div className="text-left">
+                      <div className="leading-tight">Start Live AI Scanner</div>
+                      <div className="text-xs font-normal text-emerald-200">
+                        Real-time bounding box &amp; 0.8s auto-capture
+                      </div>
+                    </div>
+                  </button>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="min-h-[46px] bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 text-sm font-semibold rounded-xl border border-slate-700 flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <span className="text-lg">📸</span>
+                      <span>System Camera</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => galleryInputRef.current?.click()}
+                      className="min-h-[46px] bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 text-sm font-semibold rounded-xl border border-slate-700 flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <span className="text-lg">🖼️</span>
+                      <span>Photo Library</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Compression in progress */}
               {isCompressing && (
-                <div className="p-4 bg-slate-900/80 rounded-xl border border-slate-700 text-center animate-pulse">
+                <div className="p-4 bg-slate-900/80 rounded-xl border border-slate-700 text-center animate-pulse mb-4">
                   <p className="text-sm text-emerald-400 font-medium">Compressing photo on mobile device...</p>
                 </div>
               )}
 
               {/* Image Preview & Compression Stats */}
-              {previewUrl && (
-                <div className="relative rounded-xl overflow-hidden border border-slate-700 bg-black/40">
-                  <img
-                    src={previewUrl}
-                    alt="Captured Item"
-                    className="w-full h-56 object-cover object-center"
-                  />
+              {previewUrl && !isLiveCameraActive && (
+                <div className="space-y-3 mb-4">
+                  <div className="relative rounded-xl overflow-hidden border border-slate-700 bg-black/40">
+                    <img
+                      src={previewUrl}
+                      alt="Captured Item"
+                      className="w-full h-56 object-cover object-center"
+                    />
 
-                  {compressionMetrics && (
-                    <div className="absolute bottom-0 inset-x-0 bg-slate-950/85 backdrop-blur-sm px-3.5 py-2 text-xs flex items-center justify-between border-t border-slate-800">
-                      <span className="text-slate-300">
-                        {formatFileSize(compressionMetrics.originalSize)} ➔{' '}
-                        <strong className="text-emerald-400">
-                          {formatFileSize(compressionMetrics.compressedSize)}
-                        </strong>
-                      </span>
-                      <span className="text-emerald-400 font-semibold">
-                        Ready for storage ({compressionMetrics.reductionPercentage}% saved)
-                      </span>
-                    </div>
-                  )}
+                    {compressionMetrics && (
+                      <div className="absolute bottom-0 inset-x-0 bg-slate-950/85 backdrop-blur-sm px-3.5 py-2 text-xs flex items-center justify-between border-t border-slate-800">
+                        <span className="text-slate-300">
+                          {formatFileSize(compressionMetrics.originalSize)} ➔{' '}
+                          <strong className="text-emerald-400">
+                            {formatFileSize(compressionMetrics.compressedSize)}
+                          </strong>
+                        </span>
+                        <span className="text-emerald-400 font-semibold">
+                          Ready for storage ({compressionMetrics.reductionPercentage}% saved)
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={startLiveCamera}
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <span>🎥 Re-scan with Live AI</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <span>📸 Pick Another</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </section>
 
-            {/* STEP 3: ON-DEVICE AI IDENTIFICATION (FOR PLANTS) */}
-            {selectedCategory === 'PLANT' && previewUrl && (
+            {/* STEP 3: AI OBJECT CLASSIFICATION & IDENTIFICATION */}
+            {previewUrl && (
               <section className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 shadow-sm">
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center text-xs font-black">
                       3
                     </span>
-                    Local Mobile AI Identification
+                    AI Object Identification
                   </span>
-                  <span className="text-xs text-slate-400 font-mono">100% On-Device</span>
+                  {classificationResult && (
+                    <span
+                      className={`text-xs px-2.5 py-0.5 rounded-full font-semibold border ${
+                        classificationResult.confidence === 'high'
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                          : classificationResult.confidence === 'medium'
+                          ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                          : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                      }`}
+                    >
+                      Confidence: {classificationResult.confidence.toUpperCase()}
+                    </span>
+                  )}
                 </div>
 
                 {isAnalyzing ? (
                   <div className="p-6 bg-slate-900/60 rounded-xl border border-slate-700 text-center">
-                    <div className="text-4xl mb-2 animate-spin inline-block">🌱</div>
+                    <div className="text-4xl mb-2 animate-spin inline-block">🔍</div>
                     <p className="text-sm text-emerald-300 font-semibold animate-pulse">
-                      Analyzing leaf morphology &amp; foliage patterns...
+                      Analyzing subject (Plant vs. Item classification)...
                     </p>
                   </div>
-                ) : aiResult ? (
+                ) : classificationResult?.confidence === 'low' ? (
+                  <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-xl text-center space-y-3">
+                    <div className="text-3xl">⚠️</div>
+                    <div>
+                      <div className="text-sm font-bold text-amber-200">Image Too Blurry to Identify</div>
+                      <p className="text-xs text-amber-300/80 mt-1">
+                        {classificationResult.message || 'Please retake the photo closer and in focus.'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={startLiveCamera}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl shadow-md transition-colors inline-flex items-center gap-1.5"
+                    >
+                      <span>🎥</span> Retake Photo Closer
+                    </button>
+                  </div>
+                ) : classificationResult?.classification === 'item' ? (
+                  <div className="p-3.5 bg-blue-950/40 border border-blue-500/30 rounded-xl space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-xs text-blue-400 font-semibold uppercase tracking-wider">
+                          Item Identified: {classificationResult.category}
+                        </div>
+                        <div className="text-lg font-bold text-white">{classificationResult.productName}</div>
+                      </div>
+                      <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 text-xs px-2.5 py-1 rounded-lg font-bold">
+                        📦 ITEM
+                      </span>
+                    </div>
+                    {classificationResult.primaryFunction && (
+                      <p className="text-xs text-slate-300 bg-slate-900/70 p-2.5 rounded-lg border border-slate-800">
+                        <span className="font-semibold text-slate-200">Primary Function:</span>{' '}
+                        {classificationResult.primaryFunction}
+                      </p>
+                    )}
+                  </div>
+                ) : (aiResult || classificationResult?.classification === 'plant') ? (
                   <div className="space-y-3">
                     <div className="p-3.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl">
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <div className="text-xs text-emerald-400 font-semibold uppercase tracking-wider">
-                            Top Identification Match
+                            Plant Identified
                           </div>
-                          <div className="text-lg font-bold text-white">{aiResult.commonName}</div>
-                          <div className="text-sm italic text-emerald-300">{aiResult.botanicalName}</div>
+                          <div className="text-lg font-bold text-white">
+                            {classificationResult?.commonName || aiResult?.commonName}
+                          </div>
+                          <div className="text-sm italic text-emerald-300">
+                            {classificationResult?.scientificName || aiResult?.botanicalName}
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <span className="inline-block bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold text-sm px-2.5 py-1 rounded-lg">
-                            {aiResult.confidence}%
-                          </span>
-                        </div>
+                        <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs px-2.5 py-1 rounded-lg font-bold">
+                          🌿 PLANT
+                        </span>
                       </div>
 
                       {/* Care badges */}
                       <div className="flex flex-wrap gap-1.5 mt-3 pt-2.5 border-t border-emerald-900/50 text-xs">
-                        <span className="bg-slate-800/80 text-amber-300 px-2 py-0.5 rounded-md">
-                          ☀️ {aiResult.sunReq.replace('_', ' ')}
-                        </span>
-                        <span className="bg-slate-800/80 text-blue-300 px-2 py-0.5 rounded-md">
-                          💧 Every {aiResult.waterFrequency} days
-                        </span>
-                        <span className="bg-slate-800/80 text-emerald-300 px-2 py-0.5 rounded-md">
-                          🐾 {aiResult.petSafe ? 'Pet Safe' : 'Keep Away From Pets'}
-                        </span>
+                        {(classificationResult?.lightNeeds || aiResult?.sunReq) && (
+                          <span className="bg-slate-800/80 text-amber-300 px-2 py-0.5 rounded-md">
+                            ☀️ {classificationResult?.lightNeeds || aiResult?.sunReq.replace('_', ' ')}
+                          </span>
+                        )}
+                        {(classificationResult?.wateringNeeds || aiResult?.waterFrequency) && (
+                          <span className="bg-slate-800/80 text-blue-300 px-2 py-0.5 rounded-md">
+                            💧 {classificationResult?.wateringNeeds || `Every ${aiResult?.waterFrequency} days`}
+                          </span>
+                        )}
+                        {aiResult && (
+                          <span className="bg-slate-800/80 text-emerald-300 px-2 py-0.5 rounded-md">
+                            🐾 {aiResult.petSafe ? 'Pet Safe' : 'Keep Away From Pets'}
+                          </span>
+                        )}
                       </div>
                     </div>
 
