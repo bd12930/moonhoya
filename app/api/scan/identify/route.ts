@@ -54,8 +54,9 @@ export async function POST(request: NextRequest) {
         const mimeMatch = imageDataUrl.match(/^data:(image\/\w+);base64,/);
         const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
-        // Try gemini-2.0-flash, falling back to gemini-1.5-flash
-        const models = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+        // Current Gemini models. gemini-2.0-flash and gemini-1.5-flash were retired (HTTP 404).
+        // Tried in order; each failure is logged above.
+        const models = ['gemini-2.5-flash', 'gemini-3.8-flash'];
         for (const model of models) {
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
           const geminiRes = await fetch(geminiUrl, {
