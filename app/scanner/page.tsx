@@ -309,22 +309,32 @@ export default function MobileScannerPage() {
       // Initialize MediaPipe vision asynchronously
       initMediaPipeVision().catch(() => {});
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+      } catch {
+        // Fallback to any available camera (e.g. desktop/laptop webcam or front camera)
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      }
 
       streamRef.current = stream;
       setIsLiveCameraActive(true);
       setIsCameraLoading(false);
 
+      // If video element already mounted, attach immediately
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
+        videoRef.current.play().catch(() => {});
       }
     } catch (err: unknown) {
       setIsCameraLoading(false);
@@ -363,15 +373,29 @@ export default function MobileScannerPage() {
       analysisCanvasRef.current = document.createElement('canvas');
     }
 
+    // Attach stream to video element as soon as active
+    const stream = streamRef.current;
+    const v = videoRef.current;
+    if (v && stream && v.srcObject !== stream) {
+      v.srcObject = stream;
+      v.play().catch(() => {});
+    }
+
     const processFrame = () => {
       if (!mounted) return;
-      const video = videoRef.current;
+      const currentVideo = videoRef.current;
       const overlay = overlayCanvasRef.current;
       const analysis = analysisCanvasRef.current;
 
-      if (video && overlay && analysis && video.readyState >= 2) {
-        const vW = video.videoWidth;
-        const vH = video.videoHeight;
+      // Ensure stream is attached if video element was mounted late
+      if (currentVideo && streamRef.current && currentVideo.srcObject !== streamRef.current) {
+        currentVideo.srcObject = streamRef.current;
+        currentVideo.play().catch(() => {});
+      }
+
+      if (currentVideo && overlay && analysis && currentVideo.readyState >= 2) {
+        const vW = currentVideo.videoWidth;
+        const vH = currentVideo.videoHeight;
 
         if (overlay.width !== overlay.clientWidth || overlay.height !== overlay.clientHeight) {
           overlay.width = overlay.clientWidth;
@@ -381,14 +405,14 @@ export default function MobileScannerPage() {
         const now = performance.now();
 
         // 1. Detect subject via MediaPipe / Foliage Saliency
-        const subject = detectSubject(video, analysis, now);
+        const subject = detectSubject(currentVideo, analysis, now);
 
         // 2. Track bounding box frame stability (~0.8s)
         const stability = tracker.update(subject, now);
         setStabilityStatus(stability);
 
-        // 3. Evaluate image sharpness (Laplacian variance on subject area)
-        const blur = evaluateBlurriness(video, subject ?? undefined, 65);
+        // 3. Evaluate image sharpness (Laplacian variance on subject area with adaptive threshold)
+        const blur = evaluateBlurriness(currentVideo, subject ?? undefined, 35);
         setBlurStatus(blur);
 
         // 4. Render bounding box, corners & stability progress
@@ -917,11 +941,20 @@ export default function MobileScannerPage() {
               {isLiveCameraActive && (
                 <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500/50 bg-black shadow-2xl mb-4">
                   <video
-                    ref={videoRef}
+                    ref={(el) => {
+                      videoRef.current = el;
+                      if (el && streamRef.current && el.srcObject !== streamRef.current) {
+                        el.srcObject = streamRef.current;
+                        el.play().catch(() => {});
+                      }
+                    }}
+                    onLoadedMetadata={(e) => {
+                      e.currentTarget.play().catch(() => {});
+                    }}
                     playsInline
                     muted
                     autoPlay
-                    className="w-full h-80 object-cover"
+                    className="w-full h-80 object-cover bg-black"
                   />
                   <canvas
                     ref={overlayCanvasRef}

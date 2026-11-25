@@ -123,7 +123,7 @@ export function calculateIoU(a: BoundingBox, b: BoundingBox): number {
 export function evaluateBlurriness(
   sourceCanvasOrVideo: HTMLCanvasElement | HTMLVideoElement,
   box?: BoundingBox,
-  threshold = 65
+  threshold = 35
 ): BlurMetric {
   const sampleW = 120;
   const sampleH = 120;
@@ -322,8 +322,8 @@ export class FrameStabilityTracker {
     this.lastBox.width = this.lastBox.width * 0.7 + currentBox.width * 0.3;
     this.lastBox.height = this.lastBox.height * 0.7 + currentBox.height * 0.3;
 
-    // Check if the subject has moved excessively
-    if (iou < 0.78 || normalizedShift > 0.08) {
+    // Check if the subject has moved excessively (forgiving threshold for hand-held phone stability)
+    if (iou < 0.65 || normalizedShift > 0.14) {
       this.stableStartTime = now;
       return { isStable: false, progress: 0, elapsedMs: 0 };
     }

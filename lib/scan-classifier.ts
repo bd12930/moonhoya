@@ -102,7 +102,7 @@ export async function classifyOnDevice(
   }
 
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const blur = evaluateBlurriness(canvas, undefined, 45);
+  const blur = evaluateBlurriness(canvas, undefined, 28);
 
   // If image is too blurry, set confidence to "low" and request retake
   if (!blur.isSharp) {
