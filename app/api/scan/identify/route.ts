@@ -4,6 +4,16 @@ import { CLASSIFICATION_SYSTEM_PROMPT, type ScanClassificationResult } from '@/l
 
 export const dynamic = 'force-dynamic';
 
+/** Retries transient overload (429/503) with a short backoff; other responses are returned as-is. */
+async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+  let res = await fetch(url, init);
+  for (let i = 1; i < attempts && (res.status === 429 || res.status === 503); i++) {
+    await new Promise((r) => setTimeout(r, 1000 * i));
+    res = await fetch(url, init);
+  }
+  return res;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -54,12 +64,11 @@ export async function POST(request: NextRequest) {
         const mimeMatch = imageDataUrl.match(/^data:(image\/\w+);base64,/);
         const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
-        // Current Gemini models. gemini-2.0-flash and gemini-1.5-flash were retired (HTTP 404).
-        // Tried in order; each failure is logged above.
-        const models = ['gemini-2.5-flash', 'gemini-3.8-flash'];
+        // gemini-2.0-flash / 1.5-flash / 2.5-flash are no longer available to new users (HTTP 404).
+        const models = ['gemini-3.8-flash'];
         for (const model of models) {
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
-          const geminiRes = await fetch(geminiUrl, {
+          const geminiRes = await fetchWithRetry(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
