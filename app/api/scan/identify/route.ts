@@ -14,6 +14,60 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Pro
   return res;
 }
 
+/**
+ * Calls an OpenAI-compatible chat completions endpoint with the image.
+ * Returns the parsed classification, or a short failure reason. Never logs the URL or key.
+ */
+async function callChatVision(
+  label: string,
+  url: string,
+  apiKey: string,
+  model: string,
+  imageDataUrl: string
+): Promise<{ result?: ScanClassificationResult; failure?: string }> {
+  try {
+    const res = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: CLASSIFICATION_SYSTEM_PROMPT },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Identify and classify this image according to instructions.' },
+              { type: 'image_url', image_url: { url: imageDataUrl } },
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.1,
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      console.error(`${label} (${model}) HTTP ${res.status}:`, errBody.slice(0, 500));
+      return { failure: `${label} HTTP ${res.status}` };
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      console.error(`${label} (${model}) returned no content:`, JSON.stringify(data).slice(0, 500));
+      return { failure: `${label} returned no content` };
+    }
+    return { result: JSON.parse(content) as ScanClassificationResult };
+  } catch (err) {
+    console.error(`${label} request error:`, err);
+    return { failure: `${label} request error` };
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -31,13 +85,17 @@ export async function POST(request: NextRequest) {
     }
 
     const { env } = await getCloudflareContext({ async: true });
-    // Check if Gemini or OpenAI API keys are configured in environment or database settings
     const envRecord = env as unknown as Record<string, unknown>;
-    let geminiKey = (process.env.GEMINI_API_KEY || envRecord?.GEMINI_API_KEY) as string | undefined;
-    let openaiKey = (process.env.OPENAI_API_KEY || envRecord?.OPENAI_API_KEY) as string | undefined;
+    const readSecret = (name: string) =>
+      (process.env[name] || envRecord?.[name]) as string | undefined;
+
+    let geminiKey = readSecret('GEMINI_API_KEY');
+    let openaiKey = readSecret('OPENAI_API_KEY');
+    const openrouterKey = readSecret('OPENROUTER_API_KEY');
+    const openrouterModel = readSecret('OPENROUTER_MODEL') || 'openai/gpt-4o-mini';
 
     // Check D1 AppSetting table if not set in environment
-    if (env.DB && !geminiKey && !openaiKey) {
+    if (env.DB && !geminiKey && !openaiKey && !openrouterKey) {
       try {
         const row = await env.DB.prepare(
           "SELECT key, value FROM AppSetting WHERE key IN ('geminiApiKey', 'openaiApiKey')"
@@ -56,8 +114,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const failures: string[] = [];
+
     // 1. Google Gemini Vision API (if key configured)
-    let geminiFailure: string | null = null;
     if (geminiKey) {
       try {
         const base64Data = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
@@ -65,100 +124,80 @@ export async function POST(request: NextRequest) {
         const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
         // gemini-2.0-flash / 1.5-flash / 2.5-flash are no longer available to new users (HTTP 404).
-        const models = ['gemini-3.8-flash'];
-        for (const model of models) {
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
-          const geminiRes = await fetchWithRetry(geminiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    { text: CLASSIFICATION_SYSTEM_PROMPT },
-                    {
-                      inlineData: {
-                        mimeType,
-                        data: base64Data,
-                      },
-                    },
-                  ],
-                },
-              ],
-              generationConfig: {
-                responseMimeType: 'application/json',
-                temperature: 0.1,
-              },
-            }),
-          });
-
-          if (geminiRes.ok) {
-            const geminiData = await geminiRes.json();
-            const textResponse = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (textResponse) {
-              const parsed = JSON.parse(textResponse);
-              return NextResponse.json(parsed);
-            }
-            console.error(`Gemini (${model}) returned no text:`, JSON.stringify(geminiData).slice(0, 500));
-            geminiFailure = `${model} returned no text`;
-          } else {
-            // Log status and body only; the request URL contains the API key and must not be logged.
-            const errBody = await geminiRes.text();
-            console.error(`Gemini (${model}) HTTP ${geminiRes.status}:`, errBody.slice(0, 500));
-            geminiFailure = `${model} HTTP ${geminiRes.status}`;
-          }
-        }
-      } catch (geminiErr) {
-        console.error('Gemini vision error:', geminiErr);
-        geminiFailure = 'request error';
-      }
-    }
-
-    // 2. OpenAI GPT-4o-mini Vision (if key configured)
-    if (openaiKey) {
-      try {
-        const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+        const model = 'gemini-3.8-flash';
+        // The request URL contains the key, so it is never logged.
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+        const geminiRes = await fetchWithRetry(geminiUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${openaiKey}`,
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: CLASSIFICATION_SYSTEM_PROMPT },
+            contents: [
               {
-                role: 'user',
-                content: [
-                  { type: 'text', text: 'Identify and classify this image according to instructions.' },
-                  { type: 'image_url', image_url: { url: imageDataUrl } },
+                parts: [
+                  { text: CLASSIFICATION_SYSTEM_PROMPT },
+                  { inlineData: { mimeType, data: base64Data } },
                 ],
               },
             ],
-            response_format: { type: 'json_object' },
-            temperature: 0.1,
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.1,
+            },
           }),
         });
 
-        if (openaiRes.ok) {
-          const openaiData = await openaiRes.json();
-          const content = openaiData.choices?.[0]?.message?.content;
-          if (content) {
-            const parsed = JSON.parse(content);
-            return NextResponse.json(parsed);
+        if (geminiRes.ok) {
+          const geminiData = await geminiRes.json();
+          const textResponse = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (textResponse) {
+            return NextResponse.json(JSON.parse(textResponse));
           }
+          console.error(`Gemini (${model}) returned no text:`, JSON.stringify(geminiData).slice(0, 500));
+          failures.push(`Gemini ${model} returned no text`);
+        } else {
+          const errBody = await geminiRes.text();
+          console.error(`Gemini (${model}) HTTP ${geminiRes.status}:`, errBody.slice(0, 500));
+          failures.push(`Gemini ${model} HTTP ${geminiRes.status}`);
         }
-      } catch (openaiErr) {
-        console.error('OpenAI vision error:', openaiErr);
+      } catch (geminiErr) {
+        console.error('Gemini vision error:', geminiErr);
+        failures.push('Gemini request error');
       }
     }
 
-    // A key exists but the provider call failed: report that, not a missing key.
-    if (geminiKey || openaiKey) {
+    // 2. OpenRouter (if key configured). OpenAI-compatible; model set by OPENROUTER_MODEL.
+    if (openrouterKey) {
+      const { result, failure } = await callChatVision(
+        'OpenRouter',
+        'https://openrouter.ai/api/v1/chat/completions',
+        openrouterKey,
+        openrouterModel,
+        imageDataUrl
+      );
+      if (result) return NextResponse.json(result);
+      if (failure) failures.push(failure);
+    }
+
+    // 3. OpenAI GPT-4o-mini Vision (if key configured)
+    if (openaiKey) {
+      const { result, failure } = await callChatVision(
+        'OpenAI',
+        'https://api.openai.com/v1/chat/completions',
+        openaiKey,
+        'gpt-4o-mini',
+        imageDataUrl
+      );
+      if (result) return NextResponse.json(result);
+      if (failure) failures.push(failure);
+    }
+
+    // A key exists but every provider call failed: report that, not a missing key.
+    if (geminiKey || openaiKey || openrouterKey) {
+      const reason = failures.length ? ` (${failures.join('; ')})` : '';
       return NextResponse.json({
         classification: null,
         confidence: 'low',
-        message: `Cloud identification failed${geminiFailure ? ` (Gemini: ${geminiFailure})` : ''}. Please try again, or fill in the details manually.`,
+        message: `Cloud identification failed${reason}. Please try again, or fill in the details manually.`,
       } satisfies ScanClassificationResult);
     }
 
