@@ -25,6 +25,7 @@ export interface AppSettingsData {
   currency: CurrencySetting;
   locations: string[];
   potSizes: PotSizeSetting[];
+  geminiApiKey?: string;
 }
 
 export const DEFAULT_CATEGORIES: CategorySetting[] = [

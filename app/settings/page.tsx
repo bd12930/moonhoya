@@ -581,6 +581,67 @@ export default function SettingsPage() {
               </div>
             </section>
 
+            {/* 5. AI CLOUD VISION CONFIGURATION */}
+            <section className="bg-slate-800/80 border border-slate-700 rounded-3xl p-5 shadow-sm space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-700/80 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-2xl">🤖</span>
+                  <div>
+                    <h2 className="text-lg font-bold text-white">AI Vision Recognition</h2>
+                    <p className="text-xs text-slate-400">
+                      Google Gemini API Key for real-time plant &amp; item identification
+                    </p>
+                  </div>
+                </div>
+                {settings.geminiApiKey ? (
+                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs px-2.5 py-1 rounded-full font-semibold">
+                    ✅ Connected
+                  </span>
+                ) : (
+                  <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs px-2.5 py-1 rounded-full font-semibold">
+                    Not Set
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs text-slate-300 font-medium">
+                  Google Gemini API Key:
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={settings.geminiApiKey || ''}
+                    onChange={(e) => setSettings({ ...settings, geminiApiKey: e.target.value.trim() })}
+                    placeholder="AIzaSy..."
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                  {settings.geminiApiKey && (
+                    <button
+                      type="button"
+                      onClick={() => setSettings({ ...settings, geminiApiKey: '' })}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs rounded-xl border border-slate-700"
+                      title="Clear key"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Used by the scanner to identify any plant species or nursery item with high accuracy. Get a free key at{' '}
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-400 underline font-medium"
+                  >
+                    Google AI Studio
+                  </a>
+                  . Can also be set in <code className="text-emerald-300">.env.local</code> or Cloudflare secrets as <code className="text-emerald-300">GEMINI_API_KEY</code>.
+                </p>
+              </div>
+            </section>
+
             {/* Global Actions */}
             <div className="flex flex-col sm:flex-row gap-3 pt-2">
               <button

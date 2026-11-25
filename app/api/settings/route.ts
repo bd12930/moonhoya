@@ -43,6 +43,7 @@ export async function GET() {
       currency: (settingsMap.currency as AppSettingsData['currency'] | undefined) || DEFAULT_SETTINGS.currency,
       locations: (settingsMap.locations as AppSettingsData['locations'] | undefined) || DEFAULT_SETTINGS.locations,
       potSizes: (settingsMap.potSizes as AppSettingsData['potSizes'] | undefined) || DEFAULT_SETTINGS.potSizes,
+      geminiApiKey: typeof settingsMap.geminiApiKey === 'string' ? settingsMap.geminiApiKey : undefined,
     };
 
     return NextResponse.json({ success: true, settings: mergedSettings, source: 'd1' });
@@ -76,7 +77,7 @@ export async function POST(request: NextRequest) {
       )
     `).run();
 
-    const allowedKeys: (keyof AppSettingsData)[] = ['categories', 'currency', 'locations', 'potSizes'];
+    const allowedKeys: (keyof AppSettingsData)[] = ['categories', 'currency', 'locations', 'potSizes', 'geminiApiKey'];
     const updatedKeys: string[] = [];
 
     for (const key of allowedKeys) {

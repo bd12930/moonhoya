@@ -9,7 +9,6 @@
  * - If image is too blurry: confidence "low" and request retake closer.
  */
 
-import { identifyPlantOnDevice } from './plant-ai';
 import { evaluateBlurriness } from './object-tracker';
 
 export interface ScanClassificationResult {
@@ -79,8 +78,16 @@ export async function classifyScannedImage(
 }
 
 /**
- * High-performance On-Device Vision Classifier.
- * Evaluates blurriness, chlorophyll content, and color morphology locally.
+ * On-Device Fallback Vision Classifier.
+ * 
+ * IMPORTANT: Without a cloud AI key (Gemini / OpenAI), this classifier can only
+ * perform basic blurriness checks. It does NOT attempt to guess plant species or
+ * item types from color histograms — that approach was fundamentally unreliable
+ * and produced 100% incorrect identifications in real-world testing.
+ * 
+ * With no cloud AI key configured, the user is prompted to add one in Settings.
+ * When a key is configured, the cloud API in /api/scan/identify handles all
+ * classification and identification accurately via vision LLMs.
  */
 export async function classifyOnDevice(
   imageDataUrl: string,
@@ -113,94 +120,12 @@ export async function classifyOnDevice(
     };
   }
 
-  // Analyze color distribution to classify "plant" vs "item"
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-  let greenPixels = 0;
-  let potTerracottaPixels = 0;
-  let metallicPlasticPixels = 0;
-  let totalSampled = 0;
-
-  for (let i = 0; i < imgData.length; i += 16) {
-    const r = imgData[i];
-    const g = imgData[i + 1];
-    const b = imgData[i + 2];
-    totalSampled++;
-
-    // Plant foliage detection
-    if ((g > r * 0.95 && g > b && g > 40) || (r > 80 && g > 60 && b < g && Math.abs(r - g) < 50)) {
-      greenPixels++;
-    }
-
-    // Pots / terracotta / plastic pots detection
-    if (r > 130 && g > 65 && g < r * 0.85 && b < 70) {
-      potTerracottaPixels++;
-    }
-
-    // Equipment / shears / metallic / hardware
-    if (Math.abs(r - g) < 15 && Math.abs(g - b) < 15 && r > 70 && r < 210) {
-      metallicPlasticPixels++;
-    }
-  }
-
-  const greenRatio = greenPixels / Math.max(1, totalSampled);
-  const potRatio = potTerracottaPixels / Math.max(1, totalSampled);
-  const hardwareRatio = metallicPlasticPixels / Math.max(1, totalSampled);
-
-  // Classify: If dominant green/foliage is present -> "plant"
-  if (greenRatio >= 0.12) {
-    try {
-      const plantResult = await identifyPlantOnDevice(img);
-      const top = plantResult.topMatch;
-      const confidenceLevel = top.confidence >= 80 ? 'high' : top.confidence >= 65 ? 'medium' : 'low';
-
-      return {
-        classification: 'plant',
-        confidence: confidenceLevel,
-        commonName: top.commonName,
-        scientificName: top.botanicalName,
-        lightNeeds: top.sunReq.replace(/_/g, ' ').toLowerCase(),
-        wateringNeeds: `Water every ${top.waterFrequency} days`,
-      };
-    } catch {
-      return {
-        classification: 'plant',
-        confidence: 'medium',
-        commonName: 'Foliage Plant',
-        scientificName: 'Tropical Plant sp.',
-        lightNeeds: 'Bright indirect light',
-        wateringNeeds: 'Water when top 2 inches of soil are dry',
-      };
-    }
-  }
-
-  // Otherwise -> "item"
-  if (potRatio > 0.08) {
-    return {
-      classification: 'item',
-      confidence: 'high',
-      productName: 'Clear Slotted Nursery Pot',
-      category: 'POT',
-      primaryFunction: 'Provides aeration and drainage for epiphytic roots and Hoyas',
-    };
-  }
-
-  if (hardwareRatio > 0.3) {
-    return {
-      classification: 'item',
-      confidence: 'medium',
-      productName: 'Nursery Trellis / Tool',
-      category: 'HARDWARE',
-      primaryFunction: 'Supports climbing vines and climbing plant growth',
-    };
-  }
-
-  // Generic greenhouse item
+  // Without a cloud AI key, we cannot reliably identify plants or items.
+  // Return low confidence and direct user to configure a Gemini API key.
   return {
-    classification: 'item',
-    confidence: 'medium',
-    productName: 'Greenhouse Supply Item',
-    category: 'EQUIPMENT',
-    primaryFunction: 'Nursery maintenance, pruning, or potting equipment',
+    classification: null,
+    confidence: 'low',
+    message: 'No AI Vision key configured. Add your free Google Gemini API key in Settings (⚙️) → "AI Vision Recognition" to accurately identify plants and items. You can still fill in the details manually below.',
   };
 }
 

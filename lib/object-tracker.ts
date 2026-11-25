@@ -17,6 +17,9 @@ export interface BoundingBox {
 export interface DetectedSubject extends BoundingBox {
   label: string;
   confidence: number;
+  isActivelyDetected: boolean;
+  /** 'mediapipe' = real object detector; 'heuristic' = color-based guess (tracking only, never auto-capture) */
+  source: 'mediapipe' | 'heuristic';
 }
 
 // MediaPipe detector singleton
@@ -82,6 +85,8 @@ export function detectSubject(
           height: Math.min(vH - bbox.originY, Math.round(bbox.height)),
           label: category?.categoryName || 'Subject',
           confidence: Math.round((category?.score ?? 0.8) * 100),
+          isActivelyDetected: true,
+          source: 'mediapipe',
         };
       }
     } catch {
@@ -259,10 +264,12 @@ export function detectFoliageSubject(
       height: Math.round(height),
       label: 'Plant Subject',
       confidence: Math.min(95, Math.round(50 + (subjectPixels / (smallW * smallH)) * 80)),
+      isActivelyDetected: true,
+      source: 'heuristic',
     };
   }
 
-  // If no specific green contrast found, center a default targeting region
+  // If no specific green contrast found, center a default targeting region (not actively detected)
   const defaultW = Math.round(vW * 0.65);
   const defaultH = Math.round(vH * 0.65);
   return {
@@ -270,21 +277,23 @@ export function detectFoliageSubject(
     y: Math.round((vH - defaultH) / 2),
     width: defaultW,
     height: defaultH,
-    label: 'Focus Subject',
-    confidence: 60,
+    label: 'Aim at Subject',
+    confidence: 0,
+    isActivelyDetected: false,
+    source: 'heuristic',
   };
 }
 
 /**
  * Tracks stability of an object bounding box over time.
- * Required duration default: 800ms (0.8s).
+ * Required duration default: 2000ms (2s).
  */
 export class FrameStabilityTracker {
   private stableStartTime: number | null = null;
   private lastBox: BoundingBox | null = null;
   private requiredDurationMs: number;
 
-  constructor(requiredDurationMs = 800) {
+  constructor(requiredDurationMs = 2000) {
     this.requiredDurationMs = requiredDurationMs;
   }
 
@@ -293,8 +302,8 @@ export class FrameStabilityTracker {
     this.lastBox = null;
   }
 
-  public update(currentBox: BoundingBox | null, now = performance.now()): StabilityState {
-    if (!currentBox) {
+  public update(currentBox: DetectedSubject | null, now = performance.now()): StabilityState {
+    if (!currentBox || !currentBox.isActivelyDetected) {
       this.reset();
       return { isStable: false, progress: 0, elapsedMs: 0 };
     }
@@ -365,19 +374,26 @@ export function drawTrackingOverlay(
   const bw = box.width * scaleX;
   const bh = box.height * scaleY;
 
-  const isLocked = stability.isStable && blur.isSharp;
-  const accentColor = isLocked ? '#10b981' : stability.progress > 0.5 ? '#34d399' : '#38bdf8';
+  const isActivelyDetected = box.isActivelyDetected;
+  const isLocked = isActivelyDetected && stability.isStable && blur.isSharp;
+  const accentColor = isLocked
+    ? '#10b981'
+    : isActivelyDetected
+    ? (stability.progress > 0.5 ? '#34d399' : '#38bdf8')
+    : 'rgba(148, 163, 184, 0.5)';
   const bracketLen = Math.min(28, Math.min(bw, bh) * 0.25);
 
   ctx.save();
 
-  // Subtle translucent bounding box fill
-  ctx.fillStyle = isLocked ? 'rgba(16, 185, 129, 0.12)' : 'rgba(56, 189, 248, 0.06)';
-  ctx.fillRect(bx, by, bw, bh);
+  // Subtle translucent bounding box fill (only when actively tracking an object)
+  if (isActivelyDetected) {
+    ctx.fillStyle = isLocked ? 'rgba(16, 185, 129, 0.12)' : 'rgba(56, 189, 248, 0.06)';
+    ctx.fillRect(bx, by, bw, bh);
+  }
 
   // Corner brackets
   ctx.strokeStyle = accentColor;
-  ctx.lineWidth = 3.5;
+  ctx.lineWidth = isActivelyDetected ? 3.5 : 2;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
@@ -409,19 +425,23 @@ export function drawTrackingOverlay(
   ctx.lineTo(bx, by + bh - bracketLen);
   ctx.stroke();
 
-  // Stability progress bar at top of bounding box
-  const barHeight = 4;
-  const barY = Math.max(6, by - 12);
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
-  ctx.fillRect(bx, barY, bw, barHeight);
+  // Stability progress bar at top of bounding box (only if active)
+  if (isActivelyDetected) {
+    const barHeight = 4;
+    const barY = Math.max(6, by - 12);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+    ctx.fillRect(bx, barY, bw, barHeight);
 
-  if (stability.progress > 0) {
-    ctx.fillStyle = accentColor;
-    ctx.fillRect(bx, barY, bw * stability.progress, barHeight);
+    if (stability.progress > 0) {
+      ctx.fillStyle = accentColor;
+      ctx.fillRect(bx, barY, bw * stability.progress, barHeight);
+    }
   }
 
   // Label tag badge
-  const labelText = `${box.label} (${box.confidence}%)`;
+  const labelText = isActivelyDetected
+    ? `${box.label} (${box.confidence}%)`
+    : '🔍 Aim at plant or item';
   ctx.font = 'bold 12px ui-sans-serif, system-ui, sans-serif';
   const textMetrics = ctx.measureText(labelText);
   const badgeW = textMetrics.width + 16;
@@ -433,17 +453,19 @@ export function drawTrackingOverlay(
   ctx.roundRect(bx, badgeY, badgeW, badgeH, 6);
   ctx.fill();
 
-  ctx.fillStyle = accentColor;
+  ctx.fillStyle = isActivelyDetected ? accentColor : '#cbd5e1';
   ctx.fillText(labelText, bx + 8, badgeY + 15);
 
   // Status message at bottom of bounding box
   let statusText = '';
-  if (!blur.isSharp) {
+  if (!isActivelyDetected) {
+    statusText = 'Center subject in frame';
+  } else if (!blur.isSharp) {
     statusText = '⚠️ Adjusting focus...';
   } else if (!stability.isStable) {
     statusText = `⏳ Hold steady (${Math.round(stability.progress * 100)}%)`;
   } else {
-    statusText = '✨ Auto-Capturing...';
+    statusText = '✅ Ready — Tap shutter to capture';
   }
 
   ctx.font = '11px ui-sans-serif, system-ui, sans-serif';

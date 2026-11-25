@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { compressImage, formatFileSize, type CompressionResult } from '@/lib/image-compressor';
-import { identifyPlantOnDevice, type PlantAIResult } from '@/lib/plant-ai';
+import type { PlantAIResult } from '@/lib/plant-ai';
 import { classifyScannedImage, type ScanClassificationResult } from '@/lib/scan-classifier';
 import {
   initMediaPipeVision,
@@ -120,7 +120,7 @@ export default function MobileScannerPage() {
   const [isLiveCameraActive, setIsLiveCameraActive] = useState(false);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [autoCaptureEnabled, setAutoCaptureEnabled] = useState(true);
+  const [autoCaptureEnabled, setAutoCaptureEnabled] = useState(false);
   const [stabilityStatus, setStabilityStatus] = useState<StabilityState>({
     isStable: false,
     progress: 0,
@@ -137,15 +137,16 @@ export default function MobileScannerPage() {
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number | null>(null);
-  const trackerRef = useRef<FrameStabilityTracker>(new FrameStabilityTracker(800));
+  const trackerRef = useRef<FrameStabilityTracker>(new FrameStabilityTracker(2000));
   const isCapturingRef = useRef(false);
+  const cameraStartTimeRef = useRef<number>(0);
   const handleCaptureCurrentFrameRef = useRef<() => Promise<void>>(async () => {});
 
   // Step 3: Local AI Identification & Classification
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [classificationResult, setClassificationResult] = useState<ScanClassificationResult | null>(null);
   const [aiResult, setAiResult] = useState<PlantAIResult | null>(null);
-  const [alternativeMatches, setAlternativeMatches] = useState<PlantAIResult[]>([]);
+  const [alternativeMatches] = useState<PlantAIResult[]>([]);
   // Every candidate the on-device AI returned for this photo (saved with the scan)
   const [aiDetections, setAiDetections] = useState<PlantAIResult[]>([]);
 
@@ -300,6 +301,7 @@ export default function MobileScannerPage() {
     setPreviewUrl(null);
     trackerRef.current.reset();
     isCapturingRef.current = false;
+    cameraStartTimeRef.current = performance.now();
 
     try {
       if (!navigator?.mediaDevices?.getUserMedia) {
@@ -430,9 +432,14 @@ export default function MobileScannerPage() {
           );
         }
 
-        // 5. Automatically capture frame when subject is stable for >= 0.8s and sharp
+        // 5. Automatically capture frame when a real subject is actively detected, stable for >= 2.0s, and sharp
+        const isWarmupOver = now - cameraStartTimeRef.current > 2500;
         if (
           autoCaptureEnabled &&
+          isWarmupOver &&
+          subject &&
+          subject.isActivelyDetected &&
+          subject.source === 'mediapipe' &&
           stability.isStable &&
           blur.isSharp &&
           !isCapturingRef.current
@@ -522,9 +529,13 @@ export default function MobileScannerPage() {
       if (result.confidence === 'low') {
         setFeedbackMessage({
           type: 'error',
-          text: result.message || 'Image is too blurry to be certain. Please retake the photo closer.',
+          text: result.message || 'Could not identify this object. You can fill in the details manually below, or add a Gemini API key in Settings for accurate AI identification.',
         });
-        return;
+        // Don't return — let user continue with manual entry
+        // Only block if the image itself is blurry (no classification at all and blur-related message)
+        if (!result.classification && result.message?.toLowerCase().includes('blurry')) {
+          return;
+        }
       }
 
       if (result.classification === 'plant') {
@@ -548,7 +559,6 @@ export default function MobileScannerPage() {
         if (result.scientificName) {
           matchWithMasterCatalog(result.scientificName);
         }
-        await runLocalPlantAI(imageDataUrl);
       } else if (result.classification === 'item') {
         const itemCat = result.category || 'EQUIPMENT';
         applyCategoryDefaults(itemCat, currency.code);
@@ -566,33 +576,10 @@ export default function MobileScannerPage() {
       }
     } catch (err: unknown) {
       console.error('Classification error:', err);
-      // Fall back to local plant matcher
-      await runLocalPlantAI(imageDataUrl);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  }
-
-  // Run on-device plant identification locally on the phone
-  async function runLocalPlantAI(imageDataUrl: string) {
-    setIsAnalyzing(true);
-    try {
-      const img = new Image();
-      img.src = imageDataUrl;
-      await new Promise((resolve) => {
-        img.onload = resolve;
+      setFeedbackMessage({
+        type: 'error',
+        text: 'Could not identify this object. Fill in the details manually below.',
       });
-
-      // Run on-device computer vision & botanical matching
-      const result = await identifyPlantOnDevice(img);
-      setAiResult(result.topMatch);
-      setAlternativeMatches(result.allMatches.slice(1, 4));
-      setAiDetections(result.allMatches);
-
-      // Match against live Master Catalog
-      matchWithMasterCatalog(result.topMatch.botanicalName, result.topMatch);
-    } catch (err: unknown) {
-      console.error('AI identification error', err);
     } finally {
       setIsAnalyzing(false);
     }
@@ -977,7 +964,7 @@ export default function MobileScannerPage() {
                         {!blurStatus.isSharp
                           ? 'Adjusting Focus...'
                           : stabilityStatus.isStable
-                          ? 'Target Locked (0.8s)'
+                          ? '✅ Ready — Tap Shutter'
                           : `Hold Steady (${Math.round(stabilityStatus.progress * 100)}%)`}
                       </span>
                     </div>
@@ -991,9 +978,9 @@ export default function MobileScannerPage() {
                             ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                             : 'bg-slate-900/80 text-slate-400 border-slate-700'
                         }`}
-                        title="Toggle automatic capture when subject is steady for ~0.8s"
+                        title="Toggle automatic capture when subject is steady for ~2s"
                       >
-                        {autoCaptureEnabled ? '⚡ Auto ON' : '✋ Auto OFF'}
+                        {autoCaptureEnabled ? '⚡ Auto ON' : '✋ Manual'}
                       </button>
 
                       <button
@@ -1012,7 +999,7 @@ export default function MobileScannerPage() {
                     <div className="w-full max-w-xs bg-slate-950/85 backdrop-blur-md border border-slate-700/80 rounded-xl p-2.5 flex items-center gap-3 shadow-lg">
                       <div className="flex-1">
                         <div className="flex items-center justify-between text-[11px] mb-1">
-                          <span className="text-slate-300 font-medium">Stability (0.8s)</span>
+                          <span className="text-slate-300 font-medium">Stability</span>
                           <span
                             className={`font-mono font-bold ${
                               stabilityStatus.isStable ? 'text-emerald-400' : 'text-sky-300'
@@ -1046,22 +1033,22 @@ export default function MobileScannerPage() {
                     </div>
                   </div>
 
-                  {/* Manual Shutter Button */}
+                  {/* Manual Shutter Button — Primary capture method */}
                   <div className="absolute bottom-2.5 inset-x-0 flex items-center justify-center z-10">
                     <button
                       type="button"
                       onClick={handleCaptureCurrentFrame}
-                      className="group relative flex items-center justify-center p-1 rounded-full active:scale-95 transition-transform"
-                      title="Snap Current Frame"
+                      className="group relative flex items-center justify-center rounded-full active:scale-90 transition-transform"
+                      title="Capture Photo"
                     >
                       <span
-                        className={`absolute inset-0 rounded-full border-2 transition-all ${
+                        className={`absolute -inset-1.5 rounded-full border-[3px] transition-all ${
                           stabilityStatus.isStable && blurStatus.isSharp
-                            ? 'border-emerald-400 shadow-lg shadow-emerald-500/50 scale-110'
-                            : 'border-white/50'
+                            ? 'border-emerald-400 shadow-lg shadow-emerald-500/60 scale-110 animate-pulse'
+                            : 'border-white/60'
                         }`}
                       />
-                      <span className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-lg text-slate-950 font-bold text-lg group-hover:bg-emerald-50">
+                      <span className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-xl text-slate-950 font-bold text-2xl group-hover:bg-emerald-50 group-active:bg-emerald-100">
                         📸
                       </span>
                     </button>
@@ -1197,18 +1184,30 @@ export default function MobileScannerPage() {
                   <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-xl text-center space-y-3">
                     <div className="text-3xl">⚠️</div>
                     <div>
-                      <div className="text-sm font-bold text-amber-200">Image Too Blurry to Identify</div>
-                      <p className="text-xs text-amber-300/80 mt-1">
+                      <div className="text-sm font-bold text-amber-200">
+                        {classificationResult.message?.includes('AI Vision')
+                          ? 'AI Vision Setup Needed'
+                          : 'Image Unclear or Too Blurry'}
+                      </div>
+                      <p className="text-xs text-amber-300/90 mt-1">
                         {classificationResult.message || 'Please retake the photo closer and in focus.'}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={startLiveCamera}
-                      className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl shadow-md transition-colors inline-flex items-center gap-1.5"
-                    >
-                      <span>🎥</span> Retake Photo Closer
-                    </button>
+                    <div className="flex justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={startLiveCamera}
+                        className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl shadow-md transition-colors inline-flex items-center gap-1.5"
+                      >
+                        <span>🎥</span> Retake Photo
+                      </button>
+                      <Link
+                        href="/settings"
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold text-xs rounded-xl border border-amber-500/30 transition-colors inline-flex items-center gap-1.5"
+                      >
+                        <span>⚙️</span> Settings
+                      </Link>
+                    </div>
                   </div>
                 ) : classificationResult?.classification === 'item' ? (
                   <div className="p-3.5 bg-blue-950/40 border border-blue-500/30 rounded-xl space-y-2.5">
