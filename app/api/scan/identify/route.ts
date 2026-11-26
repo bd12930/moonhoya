@@ -5,10 +5,10 @@ import { CLASSIFICATION_SYSTEM_PROMPT, type ScanClassificationResult } from '@/l
 export const dynamic = 'force-dynamic';
 
 /** Retries transient overload (429/503) with a short backoff; other responses are returned as-is. */
-async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+async function fetchWithRetry(url: string, init: RequestInit, attempts = 4): Promise<Response> {
   let res = await fetch(url, init);
   for (let i = 1; i < attempts && (res.status === 429 || res.status === 503); i++) {
-    await new Promise((r) => setTimeout(r, 1000 * i));
+    await new Promise((r) => setTimeout(r, 2000 * i));
     res = await fetch(url, init);
   }
   return res;
@@ -92,7 +92,8 @@ export async function POST(request: NextRequest) {
     let geminiKey = readSecret('GEMINI_API_KEY');
     let openaiKey = readSecret('OPENAI_API_KEY');
     const openrouterKey = readSecret('OPENROUTER_API_KEY');
-    const openrouterModel = readSecret('OPENROUTER_MODEL') || 'openai/gpt-4o-mini';
+    // Free vision model (zero cost on OpenRouter). Override with OPENROUTER_MODEL.
+    const openrouterModel = readSecret('OPENROUTER_MODEL') || 'google/gemma-4-31b-it:free';
 
     // Check D1 AppSetting table if not set in environment
     if (env.DB && !geminiKey && !openaiKey && !openrouterKey) {
@@ -150,6 +151,7 @@ export async function POST(request: NextRequest) {
           const geminiData = await geminiRes.json();
           const textResponse = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
           if (textResponse) {
+            console.info(`Scan identified by Gemini (${model})`);
             return NextResponse.json(JSON.parse(textResponse));
           }
           console.error(`Gemini (${model}) returned no text:`, JSON.stringify(geminiData).slice(0, 500));
@@ -174,7 +176,10 @@ export async function POST(request: NextRequest) {
         openrouterModel,
         imageDataUrl
       );
-      if (result) return NextResponse.json(result);
+      if (result) {
+        console.info(`Scan identified by OpenRouter (${openrouterModel})`);
+        return NextResponse.json(result);
+      }
       if (failure) failures.push(failure);
     }
 
@@ -187,7 +192,10 @@ export async function POST(request: NextRequest) {
         'gpt-4o-mini',
         imageDataUrl
       );
-      if (result) return NextResponse.json(result);
+      if (result) {
+        console.info('Scan identified by OpenAI (gpt-4o-mini)');
+        return NextResponse.json(result);
+      }
       if (failure) failures.push(failure);
     }
 

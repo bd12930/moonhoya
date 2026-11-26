@@ -19,9 +19,11 @@ export async function proxy(request: NextRequest) {
   const session = await readSessionToken(request.cookies.get(SESSION_COOKIE)?.value);
 
   if (PUBLIC_PATHS.has(pathname)) {
-    if (pathname === '/login' && session) {
-      const next = safeNextPath(request.nextUrl.searchParams.get('next'));
-      return NextResponse.redirect(new URL(next, request.url));
+    // Signed-in visitors with an explicit ?next= are sent there. Without one, the login
+    // page checks the session and sends them to their role's default screen.
+    const next = request.nextUrl.searchParams.get('next');
+    if (pathname === '/login' && session && next) {
+      return NextResponse.redirect(new URL(safeNextPath(next), request.url));
     }
     return NextResponse.next();
   }

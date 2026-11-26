@@ -19,7 +19,12 @@ export async function getCurrentUser(cookieValue: string | undefined): Promise<C
 
   const user = await findStoredUser(env.DB, session.username);
   if (!user) return null;
-  return { username: user.username, role: user.role };
+  return {
+    username: user.username,
+    fullName: user.fullName,
+    role: user.role,
+    defaultScreen: user.defaultScreen,
+  };
 }
 
 /** Use in route handlers. Returns the user, or a 401/403 response to send back. */

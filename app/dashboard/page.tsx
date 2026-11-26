@@ -163,11 +163,6 @@ export default async function MoonhoyaDashboard() {
                 <Link href="/account" className="hover:text-emerald-800 underline-offset-2 hover:underline">
                   Account ({currentUser.username})
                 </Link>
-                {isAdmin && (
-                  <Link href="/admin/users" className="hover:text-emerald-800 underline-offset-2 hover:underline">
-                    Manage users
-                  </Link>
-                )}
               </div>
             )}
             <div className="text-slate-600 font-medium">

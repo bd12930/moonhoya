@@ -16,6 +16,7 @@ import {
   type BlurMetric,
 } from '@/lib/object-tracker';
 import { MAX_PHOTOS_PER_SPECIES } from '@/lib/species-photos';
+import StatusInfo from '@/components/status-info';
 import {
   DEFAULT_CATEGORIES,
   DEFAULT_CURRENCY,
@@ -30,19 +31,11 @@ import {
 // Item category types
 type ItemCategory = 'PLANT' | 'FERTILIZER' | 'POT' | 'EQUIPMENT' | 'HARDWARE';
 
-/** Keep only digits and one decimal point, e.g. "1 000.5" → "1000.5". */
-function sanitizePriceInput(raw: string): string {
-  const cleaned = raw.replace(/[^0-9.]/g, '');
-  const dot = cleaned.indexOf('.');
-  return dot === -1 ? cleaned : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '');
-}
-
-/** Display a plain price string with a space every three digits, e.g. "100000" → "100 000". */
-function formatPriceInput(plain: string): string {
-  const [intPart, decPart] = plain.split('.');
-  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  return decPart !== undefined ? `${grouped}.${decPart}` : grouped;
-}
+// Unit price = typed digits × a zeros suffix (same control as the Quick Scanner).
+const ZERO_SUFFIXES = ['0', '00', '000', '0000', '00000', '000000'];
+const PRICE_MAX_DIGITS = 6;
+const IDR_DEFAULT_DIGITS = '100';
+const IDR_DEFAULT_ZEROS = '000'; // 100 × 000 = 100,000 Rupiah
 
 interface MasterSpecies {
   id: string;
@@ -179,7 +172,9 @@ export default function MobileScannerPage() {
   const [formPotSize, setFormPotSize] = useState(4);
   const [formZone, setFormZone] = useState('Shade House A');
   const [formQuantity, setFormQuantity] = useState(1);
-  const [formPriceDollars, setFormPriceDollars] = useState('18.00');
+  const [formPriceDigits, setFormPriceDigits] = useState('');
+  const [formPriceZeros, setFormPriceZeros] = useState(IDR_DEFAULT_ZEROS);
+  const formPriceAmount = formPriceDigits ? Number(formPriceDigits + formPriceZeros) : 0;
 
   // Submission & UI feedback
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -210,7 +205,10 @@ export default function MobileScannerPage() {
         if (data.settings.categories) setCategories(data.settings.categories);
         if (data.settings.currency) {
           setCurrency(data.settings.currency);
-          if (data.settings.currency.code === 'IDR') setFormPriceDollars('100000');
+          if (data.settings.currency.code === 'IDR') {
+            setFormPriceDigits(IDR_DEFAULT_DIGITS);
+            setFormPriceZeros(IDR_DEFAULT_ZEROS);
+          }
         }
         if (data.settings.locations) {
           setLocations(data.settings.locations);
@@ -224,41 +222,41 @@ export default function MobileScannerPage() {
   }
 
   // Choosing a category applies its default pot size, zone, price and (for non-plants) name.
-  // IDR uses a fixed default unit price (100,000 Rupiah) instead of the preset price.
+  // IDR uses a fixed default unit price (100 × 000 = 100,000 Rupiah). Other currencies start blank,
+  // since the digits × zeros control cannot express the old decimal presets (e.g. 18.00).
   function applyCategoryDefaults(categoryId: string, currencyCode: string) {
     setSelectedCategory(categoryId);
-    const idrPrice = currencyCode === 'IDR' ? '100000' : null;
+    const isIdr = currencyCode === 'IDR';
+    if (isIdr) {
+      setFormPriceDigits(IDR_DEFAULT_DIGITS);
+      setFormPriceZeros(IDR_DEFAULT_ZEROS);
+    } else {
+      setFormPriceDigits('');
+    }
 
     if (categoryId === 'PLANT') {
       setFormPotSize(4);
       setFormZone('Shade House A');
-      setFormPriceDollars(idrPrice ?? '18.00');
     } else if (categoryId === 'FERTILIZER') {
       setFormPotSize(0);
       setFormZone('Fertilizer Shed');
-      setFormPriceDollars(idrPrice ?? '12.50');
       setFormCommonName('Slow-Release Nursery Fertilizer');
       setFormBotanicalName('NPK-14-14-14');
     } else if (categoryId === 'POT') {
       setFormPotSize(4);
       setFormZone('Hardware Bay 3');
-      setFormPriceDollars(idrPrice ?? '3.50');
       setFormCommonName('4-Inch Clear Slotted Nursery Pot');
       setFormBotanicalName('POT-SLOT-4');
     } else if (categoryId === 'EQUIPMENT') {
       setFormPotSize(0);
       setFormZone('Hardware Bay 3');
-      setFormPriceDollars(idrPrice ?? '24.00');
       setFormCommonName('Precision Pruning Shears');
       setFormBotanicalName('EQP-SHEAR-01');
     } else if (categoryId === 'HARDWARE') {
       setFormPotSize(0);
       setFormZone('Hardware Bay 3');
-      setFormPriceDollars(idrPrice ?? '6.00');
       setFormCommonName('Bamboo Trellis U-Shape');
       setFormBotanicalName('HDW-TRELLIS-U');
-    } else if (idrPrice) {
-      setFormPriceDollars(idrPrice);
     }
   }
 
@@ -630,6 +628,10 @@ export default function MobileScannerPage() {
       setFeedbackMessage({ type: 'error', text: 'Please provide both common and botanical/code names.' });
       return;
     }
+    if (formPriceAmount <= 0) {
+      setFeedbackMessage({ type: 'error', text: 'Enter the unit price.' });
+      return;
+    }
 
     setIsSubmitting(true);
     setFeedbackMessage(null);
@@ -643,7 +645,7 @@ export default function MobileScannerPage() {
       formData.append('greenhouseZone', formZone);
       formData.append('quantity', formQuantity.toString());
 
-      const priceInCents = Math.round((parseFloat(formPriceDollars) || 18.0) * 100);
+      const priceInCents = Math.round(formPriceAmount * 100);
       formData.append('priceCents', priceInCents.toString());
 
       formData.append('sunReq', formSunReq);
@@ -824,6 +826,7 @@ export default function MobileScannerPage() {
               </span>
             </h1>
             <p className="text-xs text-slate-400">Greenhouse Mobile Inventory</p>
+            <StatusInfo tone="dark" className="mt-1" />
           </div>
         </div>
 
@@ -1543,40 +1546,72 @@ export default function MobileScannerPage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    🪴 Pot Size:
-                  </label>
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  🪴 Pot Size:
+                </label>
+                <select
+                  value={formPotSize}
+                  onChange={(e) => setFormPotSize(parseInt(e.target.value) || 0)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-base text-white focus:outline-none focus:border-emerald-500"
+                >
+                  {potSizes.map((ps) => (
+                    <option key={ps.label} value={ps.value}>
+                      {ps.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Price ({currency.code})</label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <span
+                      className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-2xl font-semibold text-slate-400"
+                      aria-hidden="true"
+                    >
+                      {currency.symbol}
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={formPriceDigits}
+                      onChange={(e) =>
+                        setFormPriceDigits(e.target.value.replace(/\D/g, '').slice(0, PRICE_MAX_DIGITS))
+                      }
+                      maxLength={PRICE_MAX_DIGITS}
+                      placeholder="e.g. 15"
+                      aria-label={`Price number in ${currency.code}, up to ${PRICE_MAX_DIGITS} digits`}
+                      className="h-16 w-full rounded-xl border border-slate-700 bg-slate-900 pl-14 pr-4 text-3xl font-semibold tabular-nums text-white placeholder:text-base placeholder:font-normal placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
                   <select
-                    value={formPotSize}
-                    onChange={(e) => setFormPotSize(parseInt(e.target.value) || 0)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-base text-white focus:outline-none focus:border-emerald-500"
+                    value={formPriceZeros}
+                    onChange={(e) => setFormPriceZeros(e.target.value)}
+                    aria-label="Number of zeros to add"
+                    className="h-16 w-32 shrink-0 rounded-xl border border-slate-700 bg-slate-900 px-3 text-xl font-semibold text-white focus:border-emerald-500 focus:outline-none"
                   >
-                    {potSizes.map((ps) => (
-                      <option key={ps.label} value={ps.value}>
-                        {ps.label}
+                    {ZERO_SUFFIXES.map((z) => (
+                      <option key={z} value={z}>
+                        {z}
                       </option>
                     ))}
                   </select>
                 </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    💲 Unit Price ({currency.code}):
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3.5 top-3.5 text-base text-slate-400 font-bold">{currency.symbol}</span>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={formatPriceInput(formPriceDollars)}
-                      onChange={(e) => setFormPriceDollars(sanitizePriceInput(e.target.value))}
-                      style={{ paddingLeft: `calc(0.875rem + ${currency.symbol.length}ch + 0.375rem)` }}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pr-3 py-3 text-base text-white font-mono focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                </div>
+                <p className="mt-2 text-sm text-slate-300">
+                  {formPriceAmount > 0 ? (
+                    <>
+                      Price: <span className="font-semibold text-white">{formatPrice(Math.round(formPriceAmount * 100), currency)}</span>
+                      <span className="text-slate-400"> ({currency.code})</span>
+                    </>
+                  ) : (
+                    <span className="text-slate-400">
+                      Type up to {PRICE_MAX_DIGITS} digits (e.g. 15), then pick zeros (e.g. 000) to get 15,000 {currency.code}.
+                    </span>
+                  )}
+                </p>
               </div>
 
               {/* Feedback Alert */}

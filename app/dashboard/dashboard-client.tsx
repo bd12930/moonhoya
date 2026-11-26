@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import StatusInfo from '@/components/status-info';
 import {
   DEFAULT_LOCATIONS,
   DEFAULT_POT_SIZES,
@@ -413,9 +414,12 @@ export default function DashboardClient({ initialItems, currency, categories, lo
           <div className="p-4 border-b border-emerald-200/80 bg-emerald-50/50">
             <div className="flex items-center justify-between">
               {isSidebarOpen && (
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl">🌿</span>
-                  <h2 className="text-lg font-bold text-emerald-900">Moonhoya</h2>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">🌿</span>
+                    <h2 className="text-lg font-bold text-emerald-900">Moonhoya</h2>
+                  </div>
+                  <StatusInfo className="mt-1" />
                 </div>
               )}
               <button
@@ -454,6 +458,15 @@ export default function DashboardClient({ initialItems, currency, categories, lo
             >
               <span className="text-xl">📱</span>
               {isSidebarOpen && <span>Mobile Scanner</span>}
+            </Link>
+
+            {/* Quick Scanner Link */}
+            <Link
+              href="/quick-scanner"
+              className="w-full flex items-center gap-3 p-3 rounded-xl transition-all font-medium text-sm text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80"
+            >
+              <span className="text-xl">⚡</span>
+              {isSidebarOpen && <span>Quick Scanner</span>}
             </Link>
 
             {/* Settings Link */}
@@ -591,6 +604,13 @@ export default function DashboardClient({ initialItems, currency, categories, lo
         >
           <span>📱</span>
           <span>Open Mobile Scanner (AI)</span>
+        </Link>
+        <Link
+          href="/quick-scanner"
+          className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 font-bold text-xs shadow-sm transition-all"
+        >
+          <span>⚡</span>
+          <span>Open Quick Scanner</span>
         </Link>
       </div>
 

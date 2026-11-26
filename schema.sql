@@ -73,7 +73,9 @@ CREATE TABLE IF NOT EXISTS AppSetting (
 
 CREATE TABLE IF NOT EXISTS AppUser (
   username TEXT PRIMARY KEY,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'staff')),
+  fullName TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'staff', 'contractor')),
+  defaultScreen TEXT NOT NULL DEFAULT '/quick-scanner' CHECK (defaultScreen IN ('/dashboard', '/quick-scanner')),
   passwordHash TEXT NOT NULL,
   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
 );

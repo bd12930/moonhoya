@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
+import StatusInfo from '@/components/status-info';
 
 export default function AccountPage() {
   const [currentPassword, setCurrentPassword] = useState('');
@@ -51,6 +52,7 @@ export default function AccountPage() {
     <div className="min-h-screen bg-emerald-50/40 flex items-center justify-center px-4">
       <div className="w-full max-w-sm bg-white rounded-2xl shadow-sm border border-emerald-200/80 p-8">
         <h1 className="text-xl font-bold text-emerald-900 mb-1">Change password</h1>
+        <StatusInfo className="mb-3" />
         <p className="text-sm text-slate-500 mb-6">Passwords are case-sensitive.</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">

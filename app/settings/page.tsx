@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import StatusInfo from '@/components/status-info';
 import {
   DEFAULT_SETTINGS,
   COMMON_CURRENCIES,
@@ -20,6 +21,17 @@ export default function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Admin-only shortcut to user management, based on the signed-in session.
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    fetch('/api/auth/session', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setIsAdmin(data?.role === 'admin'))
+      .catch(() => {
+        // Offline or signed out: keep the link hidden.
+      });
+  }, []);
 
   // New Category form state
   const [showAddCategory, setShowAddCategory] = useState(false);
@@ -211,6 +223,7 @@ export default function SettingsPage() {
               ⚙️ Nursery Settings
             </h1>
             <p className="text-xs text-slate-400">Configure Categories, Currency, Zones &amp; Sizes</p>
+            <StatusInfo tone="dark" className="mt-1" />
           </div>
         </div>
 
@@ -221,6 +234,14 @@ export default function SettingsPage() {
           >
             📊 Dashboard
           </Link>
+          {isAdmin && (
+            <Link
+              href="/admin/users"
+              className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-xl border border-slate-700 font-medium"
+            >
+              👥 Manage users
+            </Link>
+          )}
           <Link
             href="/scanner"
             className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-2 rounded-xl font-bold shadow-md"

@@ -45,7 +45,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Login is not configured on this server (AUTH_SECRET missing).' }, { status: 500 });
   }
 
-  const response = NextResponse.json({ success: true, username: user.username, role: user.role });
+  const response = NextResponse.json({
+    success: true,
+    username: user.username,
+    fullName: user.fullName,
+    role: user.role,
+    defaultScreen: user.defaultScreen,
+  });
   response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(request.nextUrl.protocol === 'https:'));
   return response;
 }

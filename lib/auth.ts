@@ -14,11 +14,47 @@ export const SESSION_IDLE_SECONDS = 60 * 10;
 
 const PBKDF2_ITERATIONS = 100_000; // Workers Web Crypto limit
 
-export type UserRole = 'admin' | 'staff';
+export const USER_ROLES = ['admin', 'manager', 'staff', 'contractor'] as const;
+export type UserRole = (typeof USER_ROLES)[number];
+
+export const USER_ROLE_LABELS: Record<UserRole, string> = {
+  admin: 'Admin',
+  manager: 'Manager',
+  staff: 'Staff',
+  contractor: 'Contractor',
+};
+
+/** Screens a user can land on after signing in. */
+export const DEFAULT_SCREENS = ['/dashboard', '/quick-scanner'] as const;
+export type DefaultScreen = (typeof DEFAULT_SCREENS)[number];
+
+export const DEFAULT_SCREEN_LABELS: Record<DefaultScreen, string> = {
+  '/dashboard': 'Dashboard',
+  '/quick-scanner': 'Quick Scanner',
+};
+
+/** Suggested landing screen for a new account with this role (admins get the dashboard). */
+export function suggestedDefaultScreen(role: UserRole): DefaultScreen {
+  return role === 'admin' ? '/dashboard' : '/quick-scanner';
+}
+
+export function isUserRole(value: unknown): value is UserRole {
+  return typeof value === 'string' && (USER_ROLES as readonly string[]).includes(value);
+}
+
+export function isDefaultScreen(value: unknown): value is DefaultScreen {
+  return typeof value === 'string' && (DEFAULT_SCREENS as readonly string[]).includes(value);
+}
+
+/** Usernames: 3–32 lowercase letters, digits, dots, dashes, or underscores. */
+export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+export const MAX_FULL_NAME_LENGTH = 120;
 
 export interface AppUser {
   username: string;
+  fullName: string;
   role: UserRole;
+  defaultScreen: DefaultScreen;
   passwordHash: string;
 }
 
@@ -151,7 +187,7 @@ export async function readSessionToken(
 
   const expiresAt = Number(expiresStr);
   if (!Number.isFinite(expiresAt) || expiresAt * 1000 < Date.now()) return null;
-  if (role !== 'admin' && role !== 'staff') return null;
+  if (!isUserRole(role)) return null;
 
   const payload = `${username}.${role}.${expiresStr}`;
   let valid = false;

@@ -46,3 +46,6 @@ next-env.d.ts
 
 # local Wrangler/dev secrets (never commit)
 .dev.vars
+
+# Exported plant photo dataset (images, do not commit)
+/dataset

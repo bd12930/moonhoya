@@ -1,13 +1,24 @@
 'use client';
 
-import { Suspense, useState, type FormEvent } from 'react';
+import { Suspense, useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { safeNextPath } from '@/lib/auth';
+import StatusInfo from '@/components/status-info';
 
 const SESSION_MESSAGES: Record<string, string> = {
   idle: 'You were signed out after 10 minutes of inactivity.',
   expired: 'Your session has expired. Please sign in again.',
 };
+
+/**
+ * Where to land after sign-in: an explicit ?next= wins, otherwise the
+ * user's default screen from the server.
+ */
+function landingPath(defaultScreen: string | undefined): string {
+  const next = new URLSearchParams(window.location.search).get('next');
+  if (next) return safeNextPath(next);
+  return safeNextPath(defaultScreen ?? null);
+}
 
 function SessionNotice() {
   const reason = useSearchParams().get('reason') ?? '';
@@ -25,6 +36,24 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Already signed in (e.g. opened /login directly): go to the default screen.
+  // Only the promise callback sets state, so the effect body stays free of synchronous setState.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/auth/session', { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) window.location.replace(landingPath(data.defaultScreen));
+      })
+      .catch(() => {
+        // Not signed in or offline: stay on the form.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -45,8 +74,8 @@ export default function LoginPage() {
         return;
       }
 
-      const next = safeNextPath(new URLSearchParams(window.location.search).get('next'));
-      window.location.assign(next);
+      const data = await res.json().catch(() => ({}));
+      window.location.assign(landingPath(data.defaultScreen));
     } catch {
       setError('Could not reach the server. Check your connection and try again.');
       setSubmitting(false);
@@ -60,6 +89,7 @@ export default function LoginPage() {
           <div className="text-3xl mb-2">🌿</div>
           <h1 className="text-xl font-bold text-emerald-900">Moonhoya Nursery</h1>
           <p className="text-sm text-slate-500 mt-1">Sign in to continue</p>
+          <StatusInfo showUser={false} className="mt-2" />
         </div>
 
         <Suspense fallback={null}>
